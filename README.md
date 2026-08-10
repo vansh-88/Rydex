@@ -28,17 +28,17 @@ npm run dev
 
 ## Scripts
 
-| Script                            | Purpose                                                           |
-| --------------------------------- | ----------------------------------------------------------------- |
-| `npm run dev`                     | Run the app with hot reload (`tsx watch`)                         |
-| `npm run build`                   | Compile TypeScript to `dist/`                                     |
-| `npm start`                       | Run the compiled build                                            |
-| `npm run lint` / `lint:fix`       | ESLint                                                            |
-| `npm run format` / `format:check` | Prettier                                                          |
-| `npm run typecheck`               | Type-check without emitting                                       |
-| `npm test`                        | Unit tests (`tests/unit`)                                         |
-| `npm run test:watch`              | Unit tests, watch mode                                            |
-| `npm run test:integration`        | Integration tests (`tests/integration`, requires Docker services) |
+| Script                            | Purpose                                   |
+| --------------------------------- | ----------------------------------------- |
+| `npm run dev`                     | Run the app with hot reload (`tsx watch`) |
+| `npm run build`                   | Compile TypeScript to `dist/`             |
+| `npm start`                       | Run the compiled build                    |
+| `npm run lint` / `lint:fix`       | ESLint                                    |
+| `npm run format` / `format:check` | Prettier                                  |
+| `npm run typecheck`               | Type-check without emitting               |
+
+Logging and automated testing infrastructure are intentionally not set
+up yet — deferred to a later pass.
 
 ## Project status
 

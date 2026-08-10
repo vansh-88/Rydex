@@ -2,6 +2,7 @@ dist
 coverage
 node_modules
 package-lock.json
+src/generated
 
 # Hand-authored architecture docs with ASCII diagrams — do not
 # auto-reformat, Prettier's markdown formatter can disturb them.

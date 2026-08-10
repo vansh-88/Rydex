@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { z } from 'zod';
 
 const envSchema = z.object({
@@ -5,9 +6,11 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().min(1).default('http://localhost:3000'),
 
-  // Consumed starting Phase 2+ — optional here, tightened to required at
+  // Consumed starting Phase 2 (Prisma/Postgres connection).
+  DATABASE_URL: z.string().min(1),
+
+  // Consumed starting Phase 3+ — optional here, tightened to required at
   // the point the module that needs them is implemented (claude.md §90).
-  DATABASE_URL: z.string().optional(),
   REDIS_URL: z.string().optional(),
   JWT_ACCESS_SECRET: z.string().optional(),
   JWT_REFRESH_SECRET: z.string().optional(),
@@ -36,7 +39,7 @@ function loadEnv(): z.infer<typeof envSchema> {
   const parsed = envSchema.safeParse(process.env);
 
   if (!parsed.success) {
-    console.error('Invalid environment configuration:', parsed.error.flatten().fieldErrors);
+    console.error('Invalid environment configuration:', z.flattenError(parsed.error).fieldErrors);
     process.exit(1);
   }
 

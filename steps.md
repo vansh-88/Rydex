@@ -665,6 +665,48 @@ reject vehicle -> status REJECTED, rejection_reason required
 PENDING/REJECTED vehicle is not ride-eligible; VERIFIED is (once Phase 7 exists)
 ```
 
+## Status: complete
+
+No migration was needed — `vehicles.verified_by`/`verified_at`/
+`rejection_reason` already existed from the Phase 2 init migration. This
+phase was pure application layer: `GET /admin/vehicles?status=PENDING`,
+`GET /admin/vehicles/:id`, `POST /admin/vehicles/:id/verify`, `POST
+/admin/vehicles/:id/reject` (`src/modules/admin/`), reusing the
+`authorize('ADMIN')` middleware and admin routing already set up in Phase
+4.5 exactly as planned — no new admin plumbing.
+
+The verify/reject repository functions use the same conditional-update
+pattern as Phase 4.5's driver-license decision (`UPDATE ... WHERE id = ?
+AND verification_status = 'PENDING'`), so two concurrent admin decisions
+on the same vehicle can't both apply (claude.md §58).
+
+While building this, the document-signing snippet
+(`documentProvider.getSignedUrl` + `extractFormatFromSecureUrl`) had
+already been written twice — once for driver licenses, once for vehicle
+documents — so it was pulled into a shared `toSignedDocumentUrl` helper in
+`src/infrastructure/cloudinary/index.ts` and both existing call sites were
+switched over. The admin vehicle service also reuses Phase 5's exported
+`toVehicleDto`/`toDocumentDto` mappers rather than re-deriving the vehicle
+DTO shape a third time.
+
+Verified end-to-end against the real Postgres/Cloudinary containers/account
+(no automated test infra yet, per the Phase 3 note): a `DRIVER` (not
+`ADMIN`) hitting `/admin/vehicles` → 403; admin lists two pending vehicles
+(one with an uploaded RC document, whose signed URL round-tripped
+correctly) alongside owner contact details; `GET /admin/vehicles/:id`
+returns the same shape for a single vehicle; verify → `VERIFIED` with
+`verified_by` correctly set to the admin's own id (confirmed directly in
+Postgres) and reflected on the owner's own `GET /vehicles`; verifying an
+already-decided vehicle → 409 `VEHICLE_NOT_PENDING`; reject without a
+`rejectionReason` → 400; reject with a reason → `REJECTED` with the reason
+stored and visible to the owner; verify/reject on a nonexistent vehicle →
+404 `VEHICLE_NOT_FOUND`; an invalid `?status=` query → 400.
+
+Not built in this phase (out of scope, tracked separately): Phase 7's ride
+creation eligibility check that will actually read `verification_status`
+to decide ride-creation eligibility — there is no ride module yet for it
+to gate.
+
 ------------------------------------------------------------------------
 
 # 10. Phase 6 --- Map Provider + Fare Engine
@@ -1530,7 +1572,7 @@ Claude must maintain this checklist.
 [x] Phase 4 — User
 [x] Phase 4.5 — Driver Upgrade (License Verification)
 [x] Phase 5 — Vehicle + Documents
-[ ] Phase 5.5 — Admin Verification Dashboard
+[x] Phase 5.5 — Admin Verification Dashboard
 [ ] Phase 6 — Map + Fare
 [ ] Phase 7 — Ride Creation
 [ ] Phase 8 — Ride Search

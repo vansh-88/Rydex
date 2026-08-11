@@ -1,8 +1,5 @@
 import type { VehicleDocumentType } from '../../../generated/prisma/enums.js';
-import {
-  documentProvider,
-  extractFormatFromSecureUrl,
-} from '../../../infrastructure/cloudinary/index.js';
+import { documentProvider, toSignedDocumentUrl } from '../../../infrastructure/cloudinary/index.js';
 import { getUniqueConstraintFields } from '../../../infrastructure/database/prismaErrors.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as vehicleDocumentRepository from '../repositories/vehicleDocumentRepository.js';
@@ -36,7 +33,7 @@ export interface VehicleDto {
   documents?: VehicleDocumentDto[];
 }
 
-interface VehicleRecord {
+export interface VehicleRecord {
   id: string;
   registrationNumber: string;
   make: string;
@@ -54,7 +51,9 @@ interface VehicleRecord {
   updatedAt: Date;
 }
 
-function toDocumentDto(document: {
+// Exported so the Admin module (§96) can render the same document shape
+// when reviewing a vehicle, instead of re-deriving it.
+export function toDocumentDto(document: {
   id: string;
   documentType: string;
   status: string;
@@ -66,15 +65,13 @@ function toDocumentDto(document: {
     id: document.id,
     documentType: document.documentType,
     status: document.status,
-    documentUrl: documentProvider.getSignedUrl(
-      document.cloudinaryPublicId,
-      extractFormatFromSecureUrl(document.secureUrl),
-    ),
+    documentUrl: toSignedDocumentUrl(document.cloudinaryPublicId, document.secureUrl),
     createdAt: document.createdAt,
   };
 }
 
-function toVehicleDto(vehicle: VehicleRecord, documents?: VehicleDocumentDto[]): VehicleDto {
+// Exported for the same reason as toDocumentDto above.
+export function toVehicleDto(vehicle: VehicleRecord, documents?: VehicleDocumentDto[]): VehicleDto {
   return {
     id: vehicle.id,
     registrationNumber: vehicle.registrationNumber,

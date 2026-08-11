@@ -30,6 +30,51 @@ export function findManyByOwner(ownerId: string) {
   return prisma.vehicle.findMany({ where: { ownerId }, orderBy: { createdAt: 'desc' } });
 }
 
+// claude.md §96: admin review needs the owner's contact details alongside
+// the vehicle, plus its documents to actually inspect.
+export function findPendingWithOwnerAndDocuments() {
+  return prisma.vehicle.findMany({
+    where: { verificationStatus: 'PENDING' },
+    orderBy: { createdAt: 'asc' },
+    include: { owner: true, documents: true },
+  });
+}
+
+// Same conditional-update pattern as the driver-license flow (§58): the
+// WHERE clause double-checks verificationStatus = 'PENDING' atomically, so
+// two concurrent admin decisions on the same vehicle can't both apply.
+export async function verifyVehicle(vehicleId: string, adminId: string): Promise<boolean> {
+  const result = await prisma.vehicle.updateMany({
+    where: { id: vehicleId, verificationStatus: 'PENDING' },
+    data: {
+      verificationStatus: 'VERIFIED',
+      verifiedById: adminId,
+      verifiedAt: new Date(),
+      rejectionReason: null,
+    },
+  });
+
+  return result.count === 1;
+}
+
+export async function rejectVehicle(
+  vehicleId: string,
+  adminId: string,
+  rejectionReason: string,
+): Promise<boolean> {
+  const result = await prisma.vehicle.updateMany({
+    where: { id: vehicleId, verificationStatus: 'PENDING' },
+    data: {
+      verificationStatus: 'REJECTED',
+      verifiedById: adminId,
+      verifiedAt: new Date(),
+      rejectionReason,
+    },
+  });
+
+  return result.count === 1;
+}
+
 export interface UpdateVehicleInput {
   make?: string | undefined;
   model?: string | undefined;

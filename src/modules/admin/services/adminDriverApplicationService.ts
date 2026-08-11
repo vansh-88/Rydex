@@ -1,4 +1,4 @@
-import { documentProvider, extractFormatFromSecureUrl } from '../../../infrastructure/cloudinary/index.js';
+import { toSignedDocumentUrl } from '../../../infrastructure/cloudinary/index.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as userDocumentRepository from '../../user/repositories/userDocumentRepository.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
@@ -21,10 +21,7 @@ export async function listPendingDriverApplications(): Promise<PendingDriverAppl
       const licenseDocumentUrl =
         document === null
           ? null
-          : documentProvider.getSignedUrl(
-              document.cloudinaryPublicId,
-              extractFormatFromSecureUrl(document.secureUrl),
-            );
+          : toSignedDocumentUrl(document.cloudinaryPublicId, document.secureUrl);
 
       return {
         userId: user.id,

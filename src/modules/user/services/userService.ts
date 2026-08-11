@@ -14,6 +14,8 @@ export interface UserProfile {
   status: string;
   ratingAverage: number | null;
   ratingCount: number;
+  driverLicenseStatus: string;
+  driverLicenseRejectionReason: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,6 +30,8 @@ function toUserProfile(user: {
   status: string;
   ratingAverage: Prisma.Decimal | null;
   ratingCount: number;
+  driverLicenseStatus: string;
+  driverLicenseRejectionReason: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): UserProfile {
@@ -41,6 +45,8 @@ function toUserProfile(user: {
     status: user.status,
     ratingAverage: user.ratingAverage === null ? null : user.ratingAverage.toNumber(),
     ratingCount: user.ratingCount,
+    driverLicenseStatus: user.driverLicenseStatus,
+    driverLicenseRejectionReason: user.driverLicenseRejectionReason,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

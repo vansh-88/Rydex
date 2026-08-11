@@ -456,6 +456,37 @@ directly (seed script / manual database insert) and authenticate
 through the same OTP login flow as everyone else. See §96 (Admin
 Module) for responsibilities and endpoints.
 
+### Becoming a DRIVER
+
+Every signup lands as `PASSENGER` (§9). A `PASSENGER` becomes a
+`DRIVER` only through the driving-license verification flow:
+
+``` text
+PASSENGER
+    |
+    | submits a driving-license document
+    v
+driver_license_status = PENDING
+    |
+    | admin reviews via the Admin Module (§96)
+    |
+    +-- approved --> role -> DRIVER, driver_license_status = VERIFIED
+    |
+    +-- rejected --> driver_license_status = REJECTED
+                      (may resubmit; role stays PASSENGER)
+```
+
+There is no self-serve role upgrade — a `PASSENGER` cannot set
+`role = DRIVER` themselves, and the license document alone does not
+grant it. Only an admin approval (§96) flips the role, atomically with
+`driver_license_status -> VERIFIED`, in the same transaction.
+
+A role change does not retroactively fix an already-issued access
+token (tokens are stateless and short-lived, §10). The user's next
+`POST /auth/refresh` re-reads their role from the database and issues
+an access token reflecting it — no extra mechanism is needed beyond
+the rotation behavior already required by §11.
+
 Driver-only operations must check driver eligibility.
 
 For example, creating a ride requires:
@@ -467,15 +498,19 @@ vehicle.owner_id == user.id
 AND
 vehicle.status == ACTIVE
 AND
+vehicle.verification_status == VERIFIED
+AND
 vehicle.seat_capacity >= requested seats
 ```
 
-For the current MVP, vehicle **eligibility for ride creation is not
-gated on document verification**. `verification_status` is tracked
-(see §12, §96) and shown to passengers/drivers, but a vehicle with
-`verification_status = PENDING` can still be used to create rides.
-This is an explicit product decision, not an oversight — see §96 for
-the rationale and how this can be tightened later.
+**Reversal of an earlier decision (see §97, 2026-08-11):** vehicle
+`verification_status` now **gates** ride creation — a vehicle must be
+admin-verified (§96) before it can be selected to create a ride. An
+earlier draft of this document said the opposite ("verification is a
+trust signal, not a gate"); that language is superseded by this
+section and by §96/§97. `verification_status` is still tracked and
+shown to passengers/drivers as before, but `PENDING`/`REJECTED`
+vehicles are no longer ride-eligible.
 
 ------------------------------------------------------------------------
 
@@ -3673,18 +3708,33 @@ changes.
 ## 96. Admin Module
 
 Added after initial architecture review (see §97 change log). Admins
-manually verify driver-uploaded vehicle documents (RC, Insurance,
-Pollution — §13) through a dashboard. This is real scope, not a future
-placeholder.
+have two review responsibilities: vehicle documents (RC, Insurance,
+Pollution — §13) and driving-license applications that grant the
+`DRIVER` role (§8). Both are real scope, not future placeholders. The
+module's blast radius is still deliberately narrow — these two review
+workflows only, nothing else.
 
 ### Responsibilities
+
+Vehicle document verification:
 
 -   list vehicles with `verification_status = PENDING`
 -   view documents via signed/private Cloudinary URLs (§14)
 -   approve (`verification_status -> VERIFIED`)
 -   reject (`verification_status -> REJECTED`, with `rejection_reason`)
--   nothing else — no user management, no ride/booking overrides, no
-    financial actions. Keep the module's blast radius small.
+
+Driver license verification (§8):
+
+-   list users with `driver_license_status = PENDING`
+-   view the submitted license document via a signed/private
+    Cloudinary URL (§14)
+-   approve — atomically sets `role -> DRIVER` and
+    `driver_license_status -> VERIFIED`
+-   reject (`driver_license_status -> REJECTED`, with
+    `rejection_reason`) — role stays `PASSENGER`; the user may resubmit
+
+Nothing else — no general user management, no ride/booking overrides,
+no financial actions.
 
 ### Role & authentication
 
@@ -3705,21 +3755,23 @@ GET  /api/v1/admin/vehicles?status=PENDING
 GET  /api/v1/admin/vehicles/:id
 POST /api/v1/admin/vehicles/:id/verify
 POST /api/v1/admin/vehicles/:id/reject
+
+GET  /api/v1/admin/driver-applications?status=PENDING
+POST /api/v1/admin/driver-applications/:userId/verify
+POST /api/v1/admin/driver-applications/:userId/reject
 ```
 
 ### Relationship to ride creation eligibility
 
-Per §8, vehicle eligibility for ride creation is **ownership + ACTIVE
-status + seat capacity** — it does not currently require
-`verification_status = VERIFIED`. Verification is a trust/visibility
-signal (e.g., a "Verified" badge shown to passengers) layered on top,
-not a gate. If product policy later requires verified-only ride
-creation, that is a small, well-contained change: add a
-`verification_status == VERIFIED` check to the same eligibility
-function referenced in §8 and §18 — do not scatter the check across
-controllers.
+**Superseded 2026-08-11 (§97):** vehicle eligibility for ride creation
+now **requires** `verification_status == VERIFIED`, in addition to
+ownership + `ACTIVE` status + seat capacity (§8). The check still lives
+in one place — the same eligibility function referenced in §8 and
+§18 — not scattered across controllers. (An earlier version of this
+section said verification was a signal, not a gate; that has been
+reversed, see §97.)
 
-### Data model addition
+### Data model additions
 
 `vehicles` gains (§12):
 
@@ -3729,9 +3781,25 @@ verified_at       nullable TIMESTAMPTZ
 rejection_reason  nullable
 ```
 
+`users` gains, for driver-license verification:
+
+``` text
+driver_license_status            NONE | PENDING | VERIFIED | REJECTED
+driver_license_verified_by       FK users (admin), nullable
+driver_license_verified_at       nullable TIMESTAMPTZ
+driver_license_rejection_reason  nullable
+```
+
+The submitted license file itself is a normal `user_documents` row
+(§13) with `document_type = DRIVING_LICENSE` — no new document-storage
+table. The four fields above hold the *decision*, mirroring exactly how
+`vehicles.verification_status`/`verified_by`/`verified_at`/
+`rejection_reason` hold the decision for vehicles while the underlying
+files live in `vehicle_documents`.
+
 No new audit-log system is introduced (§6 keeps that out of scope) —
-these three fields are sufficient to know who verified what and when
-for this MVP.
+these fields are sufficient to know who decided what and when for this
+MVP.
 
 ------------------------------------------------------------------------
 
@@ -3764,3 +3832,23 @@ Record of intentional decisions made after the initial draft, per §91.
     a dashboard (§96). This does not gate ride creation (previous
     bullet) — it's scope-additive, not a reversal of the "keep it
     simple" principle elsewhere in this document.
+
+### 2026-08-11
+
+-   **Driver upgrade path resolved.** steps.md flagged (Phase 3) that
+    every signup lands as `PASSENGER` with no way to become `DRIVER`,
+    blocking Phase 5 end-to-end. Resolved: a `PASSENGER` submits a
+    driving-license document; an admin reviews and approves/rejects it
+    through the Admin Module (§96); approval atomically sets
+    `role -> DRIVER` and `driver_license_status -> VERIFIED`. See §8
+    ("Becoming a DRIVER") and §96 for the full flow, endpoints, and
+    data model.
+-   **Vehicle verification now gates ride creation — this reverses the
+    2026-08-10 decision above ("Vehicle eligibility for ride creation
+    stays simple").** Explicit product decision, made when asked
+    directly: a vehicle must have `verification_status = VERIFIED`
+    (admin-approved, §96) before it can be selected to create a ride,
+    on top of ownership + `ACTIVE` status + seat capacity. §8 and §96
+    have been updated to match; §18's ride-creation flow and its
+    eligibility function must include this check when Phase 7 is
+    implemented.

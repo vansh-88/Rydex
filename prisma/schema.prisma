@@ -63,6 +63,15 @@ enum VehicleDocumentType {
   @@map("vehicle_document_type")
 }
 
+// claude.md §8/§96 (2026-08-11): the only user document type defined so far
+// is the driving license, submitted to become a DRIVER. Add more values here
+// if/when another user document type is specified.
+enum UserDocumentType {
+  DRIVING_LICENSE
+
+  @@map("user_document_type")
+}
+
 // Shared by user_documents and vehicle_documents (claude.md §13).
 enum DocumentStatus {
   PENDING
@@ -70,6 +79,18 @@ enum DocumentStatus {
   REJECTED
 
   @@map("document_status")
+}
+
+// claude.md §8/§96 (2026-08-11): decision state for a PASSENGER's request to
+// become a DRIVER. NONE (never applied) is distinct from PENDING so a fresh
+// user and a rejected-then-not-yet-resubmitted user aren't conflated.
+enum DriverLicenseStatus {
+  NONE
+  PENDING
+  VERIFIED
+  REJECTED
+
+  @@map("driver_license_status")
 }
 
 // --- Models ---
@@ -87,13 +108,25 @@ model User {
   ratingAverage Decimal? @map("rating_average") @db.Decimal(3, 2)
   ratingCount   Int      @default(0) @map("rating_count")
 
+  // claude.md §8/§96 (2026-08-11): how a PASSENGER becomes a DRIVER. The
+  // license file itself is a UserDocument (documentType = DRIVING_LICENSE);
+  // these fields hold the admin's decision, mirroring Vehicle's
+  // verificationStatus/verifiedBy/verifiedAt/rejectionReason below. Approval
+  // sets role -> DRIVER in the same transaction as this status -> VERIFIED.
+  driverLicenseStatus          DriverLicenseStatus @default(NONE) @map("driver_license_status")
+  driverLicenseVerifiedById    String?             @map("driver_license_verified_by") @db.Uuid
+  driverLicenseVerifiedAt      DateTime?           @map("driver_license_verified_at") @db.Timestamptz(3)
+  driverLicenseRejectionReason String?             @map("driver_license_rejection_reason")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  refreshTokens    RefreshToken[]
-  documents        UserDocument[]
-  vehicles         Vehicle[]      @relation("VehicleOwner")
-  verifiedVehicles Vehicle[]      @relation("VehicleVerifiedBy")
+  refreshTokens           RefreshToken[]
+  documents               UserDocument[]
+  vehicles                Vehicle[]      @relation("VehicleOwner")
+  verifiedVehicles        Vehicle[]      @relation("VehicleVerifiedBy")
+  driverLicenseVerifiedBy User?          @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
+  verifiedDriverLicenses  User[]         @relation("DriverLicenseVerifiedBy")
 
   @@map("users")
 }
@@ -113,19 +146,15 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
-// document_type is a free-form string, not an enum: claude.md §13 doesn't
-// enumerate what document types apply to a *user* (only vehicle documents
-// — RC/INSURANCE/POLLUTION — are specified). Tighten to an enum once that
-// business decision is made.
 model UserDocument {
-  id                 String         @id @default(uuid()) @db.Uuid
-  userId             String         @map("user_id") @db.Uuid
-  documentType       String         @map("document_type")
-  cloudinaryPublicId String         @map("cloudinary_public_id")
-  secureUrl          String         @map("secure_url")
-  status             DocumentStatus @default(PENDING)
-  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                 String           @id @default(uuid()) @db.Uuid
+  userId             String           @map("user_id") @db.Uuid
+  documentType       UserDocumentType @map("document_type")
+  cloudinaryPublicId String           @map("cloudinary_public_id")
+  secureUrl          String           @map("secure_url")
+  status             DocumentStatus   @default(PENDING)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -146,8 +175,8 @@ model Vehicle {
   isAc               Boolean     @default(false) @map("is_ac")
   isAcWorking        Boolean?    @map("is_ac_working")
 
-  // claude.md §8/§96: verification is a trust signal, not a ride-creation
-  // gate. verifiedBy/verifiedAt/rejectionReason are set by the Admin module.
+  // claude.md §8/§96/§97 (2026-08-11): VERIFIED gates ride creation.
+  // verifiedBy/verifiedAt/rejectionReason are set by the Admin module.
   verificationStatus VehicleVerificationStatus @default(PENDING) @map("verification_status")
   verifiedById       String?                   @map("verified_by") @db.Uuid
   verifiedAt         DateTime?                 @map("verified_at") @db.Timestamptz(3)

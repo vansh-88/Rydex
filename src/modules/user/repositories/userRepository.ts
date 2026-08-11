@@ -15,9 +15,10 @@ export interface CreatePassengerInput {
   phone: string;
 }
 
-// New signups always land as PASSENGER (claude.md doesn't yet define a
-// driver-upgrade flow — see steps.md Phase 3 note). ADMIN is never created
-// through this path (claude.md §96: seed script / manual DB insert only).
+// New signups always land as PASSENGER — becoming a DRIVER only happens
+// through the driver-license verification flow below (claude.md §8/§96).
+// ADMIN is never created through this path (claude.md §96: seed script /
+// manual DB insert only).
 export function createPassenger(input: CreatePassengerInput) {
   return prisma.user.create({
     data: {
@@ -50,4 +51,80 @@ export function updateProfile(id: string, data: UpdateProfileInput) {
   if (data.profileImageUrl !== undefined) update.profileImageUrl = data.profileImageUrl;
 
   return prisma.user.update({ where: { id }, data: update });
+}
+
+export interface SubmitDriverApplicationInput {
+  cloudinaryPublicId: string;
+  secureUrl: string;
+}
+
+// claude.md §8/§96: creating the UserDocument and moving the applicant to
+// PENDING happen together — a resubmission after rejection also clears the
+// previous decision fields so the application reads as fresh.
+export function submitDriverApplication(userId: string, doc: SubmitDriverApplicationInput) {
+  return prisma.$transaction(async (tx) => {
+    await tx.userDocument.create({
+      data: {
+        userId,
+        documentType: 'DRIVING_LICENSE',
+        cloudinaryPublicId: doc.cloudinaryPublicId,
+        secureUrl: doc.secureUrl,
+      },
+    });
+
+    return tx.user.update({
+      where: { id: userId },
+      data: {
+        driverLicenseStatus: 'PENDING',
+        driverLicenseVerifiedById: null,
+        driverLicenseVerifiedAt: null,
+        driverLicenseRejectionReason: null,
+      },
+    });
+  });
+}
+
+export function findPendingDriverApplications() {
+  return prisma.user.findMany({
+    where: { driverLicenseStatus: 'PENDING' },
+    orderBy: { updatedAt: 'asc' },
+  });
+}
+
+// Conditional update (WHERE ... AND driverLicenseStatus = 'PENDING') instead
+// of a separate SELECT-then-UPDATE: two concurrent admin decisions on the
+// same application can't both apply (claude.md §58). The boolean return
+// tells the caller whether the transition actually happened, so it can
+// distinguish "not found" from "not pending" without a second lock.
+export async function verifyDriverApplication(userId: string, adminId: string): Promise<boolean> {
+  const result = await prisma.user.updateMany({
+    where: { id: userId, driverLicenseStatus: 'PENDING' },
+    data: {
+      role: 'DRIVER',
+      driverLicenseStatus: 'VERIFIED',
+      driverLicenseVerifiedById: adminId,
+      driverLicenseVerifiedAt: new Date(),
+      driverLicenseRejectionReason: null,
+    },
+  });
+
+  return result.count === 1;
+}
+
+export async function rejectDriverApplication(
+  userId: string,
+  adminId: string,
+  rejectionReason: string,
+): Promise<boolean> {
+  const result = await prisma.user.updateMany({
+    where: { id: userId, driverLicenseStatus: 'PENDING' },
+    data: {
+      driverLicenseStatus: 'REJECTED',
+      driverLicenseVerifiedById: adminId,
+      driverLicenseVerifiedAt: new Date(),
+      driverLicenseRejectionReason: rejectionReason,
+    },
+  });
+
+  return result.count === 1;
 }

@@ -80,6 +80,7 @@ Phase 1  → Backend foundation
 Phase 2  → Database foundation
 Phase 3  → Authentication
 Phase 4  → User + profile
+Phase 4.5 → Driver upgrade (license verification)
 Phase 5   → Vehicle + documents
 Phase 5.5 → Admin verification dashboard
 Phase 6   → Map provider + fare engine
@@ -326,15 +327,19 @@ signup had all required fields, and reuse-detection's revocation
 write was being rolled back because it happened inside the same
 Prisma transaction as the thrown error.
 
-## Known gap: driver upgrade path
+## Known gap: driver upgrade path --- resolved (see Phase 4.5)
 
 Per an explicit product decision, every new signup is created as
-`PASSENGER` (`userRepository.createPassenger`) — there is currently
-**no way for a user to become a `DRIVER`**. Vehicle creation (Phase 5)
-and ride creation (Phase 7) both require `user.role == DRIVER`
-(claude.md §8), so this needs to be resolved — most likely a small
-addition to the User module (Phase 4) — before Phase 5 is usable
-end-to-end. Do not silently invent this; it's a product decision.
+`PASSENGER` (`userRepository.createPassenger`) — there was, at the time
+this note was written, **no way for a user to become a `DRIVER`**.
+Vehicle creation (Phase 5) and ride creation (Phase 7) both require
+`user.role == DRIVER` (claude.md §8), so this had to be resolved before
+Phase 5 could be usable end-to-end.
+
+Resolved via an explicit product decision (asked directly, not
+invented): a `PASSENGER` submits a driving-license document; an admin
+reviews and approves/rejects it; approval flips `role -> DRIVER`. See
+Phase 4.5 below and claude.md §8/§96/§97 (2026-08-11).
 
 ------------------------------------------------------------------------
 
@@ -420,6 +425,93 @@ fields silently stripped from `PATCH` body; empty `PATCH` body → 400.
 
 ------------------------------------------------------------------------
 
+# 8a. Phase 4.5 --- Driver Upgrade (License Verification)
+
+## Goal
+
+Resolve the driver-upgrade gap flagged above: give a `PASSENGER` a way
+to become a `DRIVER`, per the explicit product decision in claude.md
+§8/§96/§97 (2026-08-11) — submit a driving-license document, get
+reviewed by an admin, get approved or rejected.
+
+This phase is inserted between Phase 4 (User) and Phase 5 (Vehicle)
+because Phase 5's vehicle-creation endpoint is gated on
+`user.role == DRIVER`, and until this phase exists nobody can ever
+reach that role. It also stands up the first slice of the Admin Module
+(claude.md §96) — the vehicle-verification half of that module still
+belongs to Phase 5.5.
+
+## Tasks
+
+-   Prisma: `UserDocumentType` enum (`DRIVING_LICENSE`); `User` gains
+    `driverLicenseStatus` (`NONE | PENDING | VERIFIED | REJECTED`,
+    default `NONE`), `driverLicenseVerifiedBy` (FK → `users`,
+    nullable), `driverLicenseVerifiedAt`, `driverLicenseRejectionReason`
+-   Cloudinary provider abstraction + signed/private URL generation
+    (claude.md §14, §17-style strategy interface) — shared by this
+    phase and Phase 5's vehicle documents
+-   Upload middleware: file-type allowlist checked by magic bytes (not
+    just the client-sent MIME type), size limit
+-   `POST /api/v1/users/me/driver-application` — passenger submits a
+    license file; rejects if already `DRIVER` or already `PENDING`
+-   Admin authorization middleware (`role === 'ADMIN'`) — reused as-is
+    from the generic `authorize(...)` already built in Phase 3
+-   `GET /api/v1/admin/driver-applications?status=PENDING`
+-   `POST /api/v1/admin/driver-applications/:userId/verify` — atomic:
+    `driverLicenseStatus -> VERIFIED` **and** `role -> DRIVER`
+-   `POST /api/v1/admin/driver-applications/:userId/reject` — requires
+    `rejectionReason`; role stays `PASSENGER`, resubmission allowed
+
+## Rules
+
+-   No self-serve role upgrade — only admin approval sets `role`
+-   A previously-issued access token keeps the old role until the next
+    `POST /auth/refresh` (tokenService already re-reads role from the
+    DB on every rotation — claude.md §8)
+-   This does not widen the Admin Module beyond what claude.md §96 now
+    documents: vehicle documents + driver licenses, nothing else
+
+## Status: complete
+
+Implemented as described above: `UserDocumentType`/`DriverLicenseStatus`
+enums and the four `driverLicense*` fields on `User` (migration
+`20260811082340_driver_license_verification`); a `CloudinaryDocumentProvider`
+behind a `DocumentProvider` interface (`src/infrastructure/cloudinary/`),
+uploading with Cloudinary's `authenticated` delivery type and generating
+short-lived signed URLs on read rather than storing a permanently-usable
+link; a multer + magic-byte upload middleware
+(`src/app/middleware/uploadDocument.ts`) shared with Phase 5's vehicle
+documents; `POST /api/v1/users/me/driver-application`; and the first slice
+of the Admin Module (`src/modules/admin/`) with `GET|POST
+/api/v1/admin/driver-applications...`.
+
+Verified end-to-end against the real Postgres/Cloudinary containers/account
+(no automated test infra yet, per the Phase 3 note): submit → 200 PENDING;
+resubmit while PENDING → 409 `DRIVER_APPLICATION_PENDING`; non-admin hitting
+`/admin/driver-applications` → 403; admin list returns a working signed
+Cloudinary URL that was fetched and confirmed to be the real uploaded file;
+verify → role flips `PASSENGER → DRIVER` and `driverLicenseStatus →
+VERIFIED`; verifying an already-decided application → 409
+`DRIVER_APPLICATION_NOT_PENDING`; verifying a nonexistent user → 404
+`USER_NOT_FOUND`; the pre-existing access token issued before approval
+still decoded to `role: PASSENGER`, and `POST /auth/refresh` correctly
+issued a new token with `role: DRIVER` (confirms claude.md §8's claim about
+`tokenService` re-reading role on rotation, without needing new code);
+reject without `rejectionReason` → 400; reject with a reason → 200, and
+`GET /users/me` reflected `REJECTED` + the reason; resubmitting after
+rejection succeeded and cleared the stale rejection reason back to `null`;
+an invalid `?status=` query on the admin list endpoint → 400. A fake `.png`
+that was actually plain text was correctly rejected by the magic-byte check
+(client-sent MIME type alone would have let it through).
+
+One real bug found during this verification, unrelated to the code above:
+`.env`'s `CLOUDINARY_CLOUD_NAME` was set to the dashboard display name
+("Rydex") rather than the actual lowercase cloud slug, which Cloudinary's
+SDK rejects outright. Not a code defect — flagged to the user, who
+corrected `.env`.
+
+------------------------------------------------------------------------
+
 # 9. Phase 5 --- Vehicle + Documents
 
 ## Goal
@@ -475,14 +567,47 @@ vehicle ownership
 +
 vehicle status = ACTIVE
 +
+vehicle verification_status = VERIFIED
++
 vehicle seat_capacity >= requested seats
 ```
 
-Document verification (`verification_status`) is tracked (Phase 5.5)
-but does **not** gate ride creation in this MVP — see `claude.md`
-§8/§96.
+**Updated 2026-08-11 (claude.md §97):** verification now *does* gate ride
+creation — this reverses what this section originally said. A vehicle
+reaches `VERIFIED` only through Phase 5.5's admin endpoints; until then it
+can be created, listed, and managed by its owner, but Phase 7 (not yet
+built) will reject it for ride creation.
 
 Do not rely only on frontend checks.
+
+## Status: complete
+
+Implemented `POST /vehicles`, `GET /vehicles`, `GET /vehicles/:id`, `PATCH
+/vehicles/:id`, and `POST /vehicles/:id/documents`
+(`src/modules/vehicle/`). Creation is gated to `DRIVER` via
+`authorize('DRIVER')`; read/update/document-upload are scoped by ownership
+in the service layer (every vehicle owner is already a `DRIVER` by
+construction, so no extra role check is needed there). Registration
+numbers are normalized (uppercased, whitespace/hyphens stripped) before
+the uniqueness check, so `"KA 01 AB 1234"` and `"ka01ab1234"` collide as
+expected. Document uploads reuse Phase 4.5's Cloudinary provider and
+upload middleware — no duplicated upload/signing logic.
+
+Verified end-to-end against the real Postgres/Cloudinary containers:
+`PASSENGER` blocked from `POST /vehicles` → 403; created a vehicle as a
+freshly-approved `DRIVER`; duplicate (normalized) registration number →
+409 `REGISTRATION_NUMBER_ALREADY_IN_USE`; `GET`/`PATCH` round-tripped
+correctly, including a client attempt to set the server-controlled
+`verificationStatus` being silently stripped rather than erroring;
+uploaded an RC document and confirmed it appears in the vehicle's
+`documents` array with a working signed URL; a second driver got 404
+(not 403) on another driver's vehicle by id, by PATCH, and saw an empty
+list from `GET /vehicles` — ownership boundaries hold and existence isn't
+leaked across drivers.
+
+Not built in this phase (intentionally out of scope, tracked separately):
+Phase 5.5's admin vehicle-verification endpoints, and Phase 7's ride
+creation eligibility check that will consume `verification_status`.
 
 ------------------------------------------------------------------------
 
@@ -494,17 +619,23 @@ Allow admins to manually review and approve/reject vehicle documents
 uploaded in Phase 5. See `claude.md` §96 for the full module spec.
 
 This phase is inserted between Phase 5 (Vehicle) and Phase 6 (Map +
-Fare) because it operates directly on data Phase 5 creates, but it
-does not block any later phase — ride creation eligibility (Phase 7)
-does not depend on verification status.
+Fare) because it operates directly on data Phase 5 creates.
+
+**Updated 2026-08-11 (claude.md §97):** ride creation eligibility
+(Phase 7) *does* now depend on verification status — this reverses
+what this section originally said. A vehicle must reach
+`verification_status = VERIFIED` through this phase's endpoints before
+it is ride-eligible. The `ADMIN` role, its authorization middleware,
+and admin provisioning already exist by this point (built in Phase
+4.5) — this phase only adds the vehicle-specific review endpoints and
+the `vehicles.verified_by`/`verified_at`/`rejection_reason` columns.
 
 ## Tasks
 
--   add `ADMIN` to the user role enum
--   provision admin users via seed script (no public signup)
--   admin authorization middleware (`role === 'ADMIN'`)
 -   add `verified_by`, `verified_at`, `rejection_reason` to `vehicles`
     (migration)
+-   reuse the `authorize('ADMIN')` middleware and admin routing already
+    set up in Phase 4.5 — no new admin plumbing needed
 
 ## Endpoints
 
@@ -531,7 +662,7 @@ non-admin cannot access admin routes
 list pending vehicles
 verify vehicle -> status VERIFIED, verified_by/verified_at set
 reject vehicle -> status REJECTED, rejection_reason required
-verification status does not block ride creation
+PENDING/REJECTED vehicle is not ride-eligible; VERIFIED is (once Phase 7 exists)
 ```
 
 ------------------------------------------------------------------------
@@ -1397,7 +1528,8 @@ Claude must maintain this checklist.
 [x] Phase 2 — Database Foundation
 [x] Phase 3 — Authentication
 [x] Phase 4 — User
-[ ] Phase 5 — Vehicle + Documents
+[x] Phase 4.5 — Driver Upgrade (License Verification)
+[x] Phase 5 — Vehicle + Documents
 [ ] Phase 5.5 — Admin Verification Dashboard
 [ ] Phase 6 — Map + Fare
 [ ] Phase 7 — Ride Creation

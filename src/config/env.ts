@@ -30,11 +30,13 @@ const envSchema = z.object({
   OTP_VERIFY_IP_MAX: z.coerce.number().int().positive().default(20),
   OTP_VERIFY_IP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // Consumed starting Phase 4.5/5 (Cloudinary document uploads).
+  CLOUDINARY_CLOUD_NAME: z.string().min(1),
+  CLOUDINARY_API_KEY: z.string().min(1),
+  CLOUDINARY_API_SECRET: z.string().min(1),
+
   // Consumed starting later phases — optional here, tightened to required at
   // the point the module that needs them is implemented (claude.md §90).
-  CLOUDINARY_CLOUD_NAME: z.string().optional(),
-  CLOUDINARY_API_KEY: z.string().optional(),
-  CLOUDINARY_API_SECRET: z.string().optional(),
   FCM_PROJECT_ID: z.string().optional(),
   FCM_CLIENT_EMAIL: z.string().optional(),
   FCM_PRIVATE_KEY: z.string().optional(),

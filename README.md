@@ -31,7 +31,7 @@ npm run dev
 ## Scripts
 
 | Script                            | Purpose                                        |
-| --------------------------------- | ----------------------------------------------- |
+| --------------------------------- | ---------------------------------------------- |
 | `npm run dev`                     | Run the app with hot reload (`tsx watch`)      |
 | `npm run build`                   | Compile TypeScript to `dist/`                  |
 | `npm start`                       | Run the compiled build                         |

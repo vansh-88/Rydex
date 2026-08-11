@@ -21,7 +21,7 @@ This document is the **implementation execution plan**.
 
 Before writing code:
 
-1.  Read `RYDEX_ARCHITECTURE.md`.
+1.  Read `claude.md`.
 2.  Read this file completely.
 3.  Inspect the current repository.
 4.  Determine which phases are already complete.
@@ -311,6 +311,30 @@ logout
 unauthorized request
 role authorization
 ```
+
+Automated test infrastructure is intentionally not set up in this
+project yet (deferred by explicit request — see git history). The
+above was instead verified manually against the real Postgres/Redis
+containers: OTP request/verify (valid, invalid, expired-key,
+too-many-attempts), resend cooldown, per-IP rate limiting on both
+endpoints, refresh rotation, revoked-token reuse detection, idempotent
+logout, and `authenticate`/`authorize` middleware (no protected route
+exists yet to exercise them over real HTTP — exercised directly
+instead). Two real bugs were caught and fixed in the process:
+`verifyOtp` was consuming the one-time code before validating that
+signup had all required fields, and reuse-detection's revocation
+write was being rolled back because it happened inside the same
+Prisma transaction as the thrown error.
+
+## Known gap: driver upgrade path
+
+Per an explicit product decision, every new signup is created as
+`PASSENGER` (`userRepository.createPassenger`) — there is currently
+**no way for a user to become a `DRIVER`**. Vehicle creation (Phase 5)
+and ride creation (Phase 7) both require `user.role == DRIVER`
+(claude.md §8), so this needs to be resolved — most likely a small
+addition to the User module (Phase 4) — before Phase 5 is usable
+end-to-end. Do not silently invent this; it's a product decision.
 
 ------------------------------------------------------------------------
 
@@ -1333,7 +1357,7 @@ Claude must maintain this checklist.
 [x] Phase 0 — Repository Initialization
 [x] Phase 1 — Backend Foundation
 [x] Phase 2 — Database Foundation
-[ ] Phase 3 — Authentication
+[x] Phase 3 — Authentication
 [ ] Phase 4 — User
 [ ] Phase 5 — Vehicle + Documents
 [ ] Phase 5.5 — Admin Verification Dashboard

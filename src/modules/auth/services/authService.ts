@@ -1,4 +1,4 @@
-import { Prisma } from '../../../generated/prisma/client.js';
+import { getUniqueConstraintFields } from '../../../infrastructure/database/prismaErrors.js';
 import { emailProvider } from '../../../infrastructure/resend/index.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
@@ -32,12 +32,7 @@ export interface AuthenticatedSession {
 }
 
 function isUniquePhoneViolation(err: unknown): boolean {
-  return (
-    err instanceof Prisma.PrismaClientKnownRequestError &&
-    err.code === 'P2002' &&
-    Array.isArray(err.meta?.target) &&
-    err.meta.target.includes('phone')
-  );
+  return getUniqueConstraintFields(err).includes('phone');
 }
 
 export async function verifyOtpAndAuthenticate(

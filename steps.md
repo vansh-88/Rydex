@@ -380,6 +380,44 @@ verification status
 payment status
 ```
 
+## Status: complete
+
+Implemented `GET /api/v1/users/me` and `PATCH /api/v1/users/me`, both
+behind the existing `authenticate` middleware (no separate authorization
+rule needed — every user may only ever read/write their own profile, since
+the id comes from the access token, never the request body/params).
+
+`PATCH` accepts `name`, `phone`, `email`, `profileImageUrl` only; the zod
+schema silently strips any other key (`role`, `status`, `ratingAverage`,
+`ratingCount`, ...), and `.refine()` rejects an empty body. A dedicated
+"profile image abstraction" was not built — Cloudinary integration is
+Phase 5's job; for now `profileImageUrl` just accepts a URL string
+directly, matching what the current schema can actually store.
+
+## Real bug found and fixed during manual verification
+
+Manually exercising the duplicate-email/duplicate-phone path (no
+automated test infra yet, per the Phase 3 note) surfaced a bug that
+predates this phase: `authService.isUniquePhoneViolation` — and the
+equivalent check written for this phase's `userService.updateProfile`
+— assumed Prisma's older `err.meta.target: string[]` shape for P2002
+unique-constraint errors. Prisma 7's pg driver adapter reports the
+violated column(s) at `err.meta.driverAdapterError.cause.constraint.fields`
+instead; `target` is no longer set. Both checks silently failed closed,
+so duplicate phone/email fell through as raw `INTERNAL_ERROR` 500s
+instead of `PHONE_ALREADY_IN_USE` / `EMAIL_ALREADY_IN_USE` 409s.
+
+Fixed once, centrally, in `src/infrastructure/database/prismaErrors.ts`
+(`getUniqueConstraintFields`), which checks both shapes so it keeps
+working across driver-adapter versions. Both `authService.ts` and the
+new `userService.ts` now call it instead of duplicating driver-specific
+error parsing. Verified against the real Postgres container: duplicate
+email on `PATCH /users/me` → 409 `EMAIL_ALREADY_IN_USE`; duplicate phone
+on `PATCH /users/me` → 409 `PHONE_ALREADY_IN_USE`; duplicate phone on
+signup (`POST /auth/verify-otp`) → 409 `PHONE_ALREADY_IN_USE` (previously
+500). Also verified: `GET /users/me` without a token → 401; role/rating
+fields silently stripped from `PATCH` body; empty `PATCH` body → 400.
+
 ------------------------------------------------------------------------
 
 # 9. Phase 5 --- Vehicle + Documents
@@ -1358,7 +1396,7 @@ Claude must maintain this checklist.
 [x] Phase 1 — Backend Foundation
 [x] Phase 2 — Database Foundation
 [x] Phase 3 — Authentication
-[ ] Phase 4 — User
+[x] Phase 4 — User
 [ ] Phase 5 — Vehicle + Documents
 [ ] Phase 5.5 — Admin Verification Dashboard
 [ ] Phase 6 — Map + Fare

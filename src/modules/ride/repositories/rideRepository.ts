@@ -192,3 +192,49 @@ export async function complete(id: string): Promise<boolean> {
   });
   return result.count === 1;
 }
+
+export interface ReservedSeats {
+  farePerSeat: number;
+  driverId: string;
+}
+
+// claude.md §35/§36: the seat hold IS this atomic conditional UPDATE — its
+// WHERE guard (bookable status + enough seats) doubles as the "SELECT ride
+// FOR UPDATE + check" step, taking a real row lock for the statement's
+// duration exactly like rideRepository.cancel/start/complete above. Also
+// flips OPEN -> FULL in the same statement when this booking exhausts the
+// last seat (claude.md §19). Must run inside the same `db` transaction as
+// the booking INSERT (claude.md §36) — pass the `tx` client, not `prisma`.
+export async function reserveSeats(
+  db: Prisma.TransactionClient,
+  rideId: string,
+  seatCount: number,
+): Promise<ReservedSeats | null> {
+  const rows = await db.$queryRaw<{ fare_per_seat: string; driver_id: string }[]>(Prisma.sql`
+    UPDATE rides
+    SET
+      available_seats = available_seats - ${seatCount},
+      status = CASE WHEN available_seats - ${seatCount} = 0 THEN 'FULL'::ride_status ELSE status END
+    WHERE id = ${rideId}::uuid
+      AND status IN ('OPEN', 'FULL')
+      AND available_seats >= ${seatCount}
+    RETURNING fare_per_seat, driver_id
+  `);
+
+  const row = rows[0];
+  return row ? { farePerSeat: Number(row.fare_per_seat), driverId: row.driver_id } : null;
+}
+
+// Reverses reserveSeats. FULL -> OPEN only (never touches STARTED/COMPLETED/
+// CANCELLED/PENDING_PAYMENT) — safe to call even if the ride moved on, since
+// releasing a seat on a dead ride is a harmless no-op (search already
+// excludes anything but OPEN/FULL, claude.md §22).
+export async function releaseSeats(db: Prisma.TransactionClient, rideId: string, seatCount: number): Promise<void> {
+  await db.$executeRaw(Prisma.sql`
+    UPDATE rides
+    SET
+      available_seats = available_seats + ${seatCount},
+      status = CASE WHEN status = 'FULL' THEN 'OPEN'::ride_status ELSE status END
+    WHERE id = ${rideId}::uuid
+  `);
+}

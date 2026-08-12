@@ -3,6 +3,8 @@ import { Router } from 'express';
 import { authenticate } from '../../app/middleware/authenticate.js';
 import { authorize } from '../../app/middleware/authorize.js';
 import { validateBody, validateQuery } from '../../app/middleware/validate.js';
+import * as bookingController from '../booking/controllers/bookingController.js';
+import { createBookingSchema } from '../booking/schemas/bookingSchemas.js';
 import * as rideController from './controllers/rideController.js';
 import { searchRidesQuerySchema } from './schemas/rideSearchSchemas.js';
 import { createRideSchema } from './schemas/rideSchemas.js';
@@ -28,3 +30,9 @@ rideRouter.get('/:id', rideController.getById);
 rideRouter.post('/:id/cancel', rideController.cancel);
 rideRouter.post('/:id/start', rideController.start);
 rideRouter.post('/:id/complete', rideController.complete);
+
+// claude.md §51: booking creation is nested under the ride resource. The
+// booking module owns the actual logic (services/repositories/controller);
+// this is routing wiring only, same pattern as admin/routes.ts already
+// composing other modules' functions.
+rideRouter.post('/:id/bookings', validateBody(createBookingSchema), bookingController.create);

@@ -1222,6 +1222,98 @@ handles this).
 
 Do not trust Redis alone for final seat consistency.
 
+## Status: complete
+
+Implemented all three endpoints (`src/modules/booking/`): `POST
+/rides/:id/bookings` is registered on `rideRouter`
+(`src/modules/ride/routes.ts`) per claude.md §51's nesting, but its
+controller/service/repository all live in the booking module — routing
+is the only thing that crosses the module boundary, same pattern
+`admin/routes.ts` already established. `GET /bookings/:id` and `POST
+/bookings/:id/cancel` are a new `bookingRouter` mounted at
+`/api/v1/bookings`.
+
+Two real architectural gaps found and closed along the way, both
+documented in claude.md §97 (2026-08-13):
+
+-   §32 listed `booking_status` and `payment_status` as two separate
+    columns, but §33's actual state list describes one lifecycle, not
+    two — resolved to a single `status` column, matching the precedent
+    Ride already set (§19). Schema/architecture doc updated to match.
+-   Phase 9's seat-hold expiry requires a BullMQ delayed job, but no
+    BullMQ infrastructure exists yet (it was sequenced for Phase 12).
+    Added `bullmq` + `src/infrastructure/queue/` now — a dedicated
+    ioredis connection (`maxRetriesPerRequest: null`, required by
+    BullMQ, kept separate from `infrastructure/redis`'s rate-limiting
+    connection) and one `booking-expiry` queue. The Worker runs inside
+    the same process as the API server for now (§66: this doesn't
+    break statelessness — Redis holds all job state, any instance can
+    pick up any job) and is started/closed alongside the HTTP server in
+    `server.ts`. Phase 12 reuses this same queue infrastructure.
+
+Seat reservation (claude.md §36) is one atomic conditional `UPDATE`
+(`rideRepository.reserveSeats`) — `available_seats = available_seats -
+N WHERE status IN ('OPEN','FULL') AND available_seats >= N`, in the same
+statement flipping `OPEN -> FULL` when a booking exhausts the last seat.
+This is the "SELECT ride FOR UPDATE + check + decrement" sequence from
+the spec collapsed into one statement — a real Postgres row lock is
+still held for the statement's duration, just expressed as a guarded
+UPDATE rather than a separate SELECT FOR UPDATE, the same idiom already
+used for `rideRepository.cancel/start/complete` (§58). This UPDATE and
+the booking `INSERT` run inside one `prisma.$transaction`; the
+`PaymentProvider.createOrder()` call for the 10% prepayment (reusing the
+same `StubPaymentProvider` from Phase 7, per §37) happens *after* that
+transaction commits, then a follow-up single-row update attaches the
+order id — external calls never sit inside the seat-reservation
+transaction (§5.5), and if `createOrder()` were to fail, the booking
+still exists as `PENDING_PAYMENT` and self-heals via the same TTL expiry
+path as an abandoned payment.
+
+Cancellation (`bookingRepository.cancel`, passenger-initiated, valid
+from `PENDING_PAYMENT` or `CONFIRMED`) and expiry
+(`bookingRepository.expireIfPending`, TTL-job-initiated, valid only from
+`PENDING_PAYMENT`) are two distinct conditional updates rather than one
+shared function — a `CONFIRMED` booking must never be touched by the
+expiry job, only by an explicit passenger cancel. Both release seats via
+`rideRepository.releaseSeats` inside the same transaction as the
+booking-status conditional update, so a booking that's already
+terminal by the time either runs is a no-op (idempotent, satisfies
+"must not release seats for a booking that was confirmed in the
+meantime").
+
+Verified end-to-end against the real Postgres/Redis/BullMQ stack (no
+automated test infra yet, per the Phase 3 note; `BOOKING_PAYMENT_TTL_SECONDS`
+temporarily set to 5s for fast expiry testing). **The mandatory
+concurrency test**: two passengers firing simultaneous `POST
+/bookings` requests at a ride with exactly 1 seat left (real parallel
+threads, not sequential) — exactly one received 201, the other 409
+`NO_SEATS_AVAILABLE`; the ride's `available_seats` ended at exactly 0
+(never negative) and `status` correctly flipped to `FULL`; exactly one
+booking row existed afterward. Also verified: a driver booking their own
+ride → 409 `CANNOT_BOOK_OWN_RIDE`; a nonexistent ride → 404
+`RIDE_NOT_FOUND`; requesting more seats than the ride has → 409
+`NO_SEATS_AVAILABLE`; booking a still-`PENDING_PAYMENT` (not yet `OPEN`)
+ride → 409 `RIDE_NOT_BOOKABLE`; a booking with a custom pickup
+coordinate correctly stored it while drop correctly defaulted to the
+ride's own destination; fare/prepayment math matched hand calculation
+exactly (₹188 fare × 1 seat × 10% → ₹19); `GET /bookings/:id` correctly
+visible to both the owning passenger and the ride's driver, and 404 (not
+403) for an unrelated passenger — existence not leaked; an unrelated
+passenger's cancel attempt → 404; a fresh booking's immediate manual
+cancel correctly released the seat and restored ride status to `OPEN`;
+cancelling an already-`CANCELLED` booking → 409
+`BOOKING_ALREADY_CANCELLED`; and — cleanly isolated from the manual-cancel
+test — a booking left completely untouched past the 5s TTL was
+automatically transitioned to `CANCELLED` by the BullMQ worker and its
+seats released, flipping the ride from `FULL` back to `OPEN` with the
+correct count, with no manual intervention. `npm run typecheck`, `npm
+run lint`, and `npm run build` all pass.
+
+Not built in this phase, intentionally deferred: actual payment
+confirmation (`PENDING_PAYMENT -> CONFIRMED`, `PAYMENT_FAILED`
+transitions) — both are Phase 10's webhook; forfeiture of the prepaid
+amount and any refund logic on cancellation — Phase 11 (§34).
+
 ------------------------------------------------------------------------
 
 # 14. Phase 10 --- Payment System
@@ -1763,7 +1855,7 @@ Claude must maintain this checklist.
 [x] Phase 6 — Map + Fare
 [x] Phase 7 — Ride Creation
 [x] Phase 8 — Ride Search
-[ ] Phase 9 — Booking
+[x] Phase 9 — Booking
 [ ] Phase 10 — Payment
 [ ] Phase 11 — Cancellation + Settlement
 [ ] Phase 12 — Notifications

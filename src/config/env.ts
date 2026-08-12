@@ -57,11 +57,17 @@ const envSchema = z.object({
   RIDE_SEARCH_MAX_LIMIT: z.coerce.number().int().positive().default(50),
   // Consumed starting Phase 7 (commissionService, claude.md §30).
   DRIVER_COMMISSION_PERCENT: z.coerce.number().positive().default(5),
-  PASSENGER_PREPAYMENT_PERCENT: z.coerce.number().optional(),
+  // Consumed starting Phase 9 (bookingService, claude.md §34).
+  PASSENGER_PREPAYMENT_PERCENT: z.coerce.number().positive().default(10),
   FINAL_PAYMENT_PERCENT: z.coerce.number().optional(),
   PLATFORM_COMMISSION_PERCENT: z.coerce.number().optional(),
   DRIVER_EARLY_CANCEL_REFUND_PERCENT: z.coerce.number().optional(),
   DRIVER_CANCEL_THRESHOLD_HOURS: z.coerce.number().optional(),
+
+  // Consumed starting Phase 9 (booking seat-hold expiry, claude.md §35/§36).
+  // How long a PENDING_PAYMENT booking holds its seat before the BullMQ
+  // delayed job releases it.
+  BOOKING_PAYMENT_TTL_SECONDS: z.coerce.number().int().positive().default(900),
 
   // Consumed starting Phase 6 (HeuristicFareStrategy, claude.md §29). All
   // values configurable rather than hard-coded, per §29's "avoid uncontrolled

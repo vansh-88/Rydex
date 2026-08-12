@@ -2,6 +2,7 @@ import type { Express } from 'express';
 
 import { adminRouter } from '../modules/admin/routes.js';
 import { authRouter } from '../modules/auth/routes.js';
+import { bookingRouter } from '../modules/booking/routes.js';
 import { rideRouter } from '../modules/ride/routes.js';
 import { userRouter } from '../modules/user/routes.js';
 import { vehicleRouter } from '../modules/vehicle/routes.js';
@@ -14,4 +15,5 @@ export function registerRoutes(app: Express): void {
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/vehicles', vehicleRouter);
   app.use('/api/v1/rides', rideRouter);
+  app.use('/api/v1/bookings', bookingRouter);
 }

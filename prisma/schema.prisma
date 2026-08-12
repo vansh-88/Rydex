@@ -108,6 +108,24 @@ enum RideStatus {
   @@map("ride_status")
 }
 
+// claude.md §33. §97 (2026-08-13): §32 originally also listed a separate
+// `payment_status` column alongside `booking_status`, but §33's own state
+// list (PENDING_PAYMENT/PAYMENT_FAILED alongside CONFIRMED/CANCELLED/
+// COMPLETED) is a single state machine, not two independent ones — and
+// that's exactly the pattern Ride already settled on (one `status` column,
+// no separate `payment_status`, §19). Resolved the same way: one `status`
+// column here too. A Payment row's own `status` (§38) remains the source of
+// truth for gateway-level payment-attempt detail.
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  PAYMENT_FAILED
+  CANCELLED
+  COMPLETED
+
+  @@map("booking_status")
+}
+
 // --- Models ---
 
 model User {
@@ -143,6 +161,7 @@ model User {
   driverLicenseVerifiedBy User?          @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
   verifiedDriverLicenses  User[]         @relation("DriverLicenseVerifiedBy")
   ridesDriven             Ride[]         @relation("RideDriver")
+  bookings                Booking[]
 
   @@map("users")
 }
@@ -271,11 +290,55 @@ model Ride {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  driver  User    @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  driver   User      @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle  Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  bookings Booking[]
 
   @@index([driverId])
   @@index([vehicleId])
   @@index([departureTime, status])
   @@map("rides")
+}
+
+// claude.md §32/§35/§36. No PostGIS geography here — unlike Ride,
+// pickup/drop have no ST_DWithin/ST_Distance query requirement in this
+// phase (they're informational, defaulting to the ride's own origin/
+// destination), so plain lat/lng columns avoid the Unsupported-type/raw-SQL
+// machinery Ride needed for a real reason (search, §20-§23).
+model Booking {
+  id          String @id @default(uuid()) @db.Uuid
+  rideId      String @map("ride_id") @db.Uuid
+  passengerId String @map("passenger_id") @db.Uuid
+
+  seatCount Int @map("seat_count")
+
+  pickupLat Float @map("pickup_lat")
+  pickupLng Float @map("pickup_lng")
+  dropLat   Float @map("drop_lat")
+  dropLng   Float @map("drop_lng")
+
+  // §41/§84: locked at booking creation from the ride's own farePerSeat,
+  // never recalculated later.
+  farePerSeat   Decimal @map("fare_per_seat") @db.Decimal(10, 2)
+  totalFare     Decimal @map("total_fare") @db.Decimal(10, 2)
+  // §34: 10% of totalFare, paid upfront.
+  prepaidAmount Decimal @map("prepaid_amount") @db.Decimal(10, 2)
+
+  // Mirrors Ride's postingCommissionOrderId (§97 2026-08-12): set right
+  // after the booking row is created (payment-order creation is an
+  // external call, kept out of the seat-reservation transaction, §5.5), so
+  // nullable until that follow-up write lands.
+  prepaymentOrderId String? @map("prepayment_order_id")
+
+  status BookingStatus @default(PENDING_PAYMENT)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  ride      Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  passenger User @relation(fields: [passengerId], references: [id], onDelete: Cascade)
+
+  @@index([rideId])
+  @@index([passengerId])
+  @@map("bookings")
 }

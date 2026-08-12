@@ -1443,14 +1443,23 @@ fare_per_seat
 total_fare
 prepaid_amount
 
-booking_status
-payment_status
+status
 
 created_at
 updated_at
 ```
 
+**Updated 2026-08-13 (see §97):** a single `status` column, not the
+`booking_status` + `payment_status` pair originally listed above — §33's
+own state list already conflates both into one state machine, exactly
+mirroring Ride's single `status` column (§19). A `payments` row's own
+`status` (§38) remains the source of truth for gateway-level detail.
+
 Pickup/drop points can use PostGIS geography where appropriate.
+**Implemented as plain lat/lng columns, not PostGIS geography** — see
+§97 (2026-08-13): this phase has no ST_DWithin/ST_Distance query against
+booking pickup/drop, so the Unsupported-type/raw-SQL machinery Ride
+needed for a real reason (search) isn't justified here.
 
 ------------------------------------------------------------------------
 
@@ -1472,6 +1481,8 @@ Typical flow:
 PENDING_PAYMENT
        |
        +----> PAYMENT_FAILED
+       |
+       +----> CANCELLED   (passenger cancels, or TTL seat-hold expiry — §35/§36)
        |
        v
 CONFIRMED
@@ -3894,3 +3905,43 @@ Record of intentional decisions made after the initial draft, per §91.
     warrants the operational overhead. The `MapProvider` interface
     itself (§17) is unchanged — this is a Strategy-pattern provider
     swap, exactly what the interface exists to make cheap.
+
+### 2026-08-13
+
+-   **Booking gets one `status` column, not `booking_status` +
+    `payment_status`.** §32 listed both as separate fields, but §33's
+    state list (`PENDING_PAYMENT`/`PAYMENT_FAILED` alongside
+    `CONFIRMED`/`CANCELLED`/`COMPLETED`) is a single state machine
+    describing one lifecycle, not two independent ones — and that's
+    exactly the design Ride already settled on (one `status` column,
+    no separate `payment_status`, §19). Resolved the same way, for
+    consistency: one `status` column on `bookings` too. A `payments`
+    row's own `status` (§38, Phase 10) remains the source of truth for
+    gateway-level payment-attempt detail. §32 updated to match.
+-   **Booking pickup/drop implemented as plain lat/lng, not PostGIS
+    geography.** §32 said "where appropriate" — Phase 9 has no
+    `ST_DWithin`/`ST_Distance` query against a booking's pickup/drop
+    point (unlike Ride's origin/destination, which exist because of
+    ride search, §20-§23), so the `Unsupported`-type/raw-SQL machinery
+    Ride needed for a real reason isn't justified here. Plain `Float`
+    columns, normal Prisma Client access throughout
+    `bookingRepository.ts`. Revisit if a future requirement (e.g.
+    matching bookings by pickup proximity) actually needs it.
+-   **First BullMQ queue stood up in Phase 9, not Phase 12 as
+    originally sequenced.** §43's queue infrastructure was planned
+    for the Notification module (steps.md Phase 12), but Phase 9's own
+    "Reservation expiry" section requires a BullMQ delayed job to
+    release a `PENDING_PAYMENT` booking's seat hold if payment never
+    completes — there's no way to build seat-hold expiry without it.
+    Added `bullmq` as a dependency and
+    `src/infrastructure/queue/` (a dedicated BullMQ-configured Redis
+    connection, one `booking-expiry` queue) in Phase 9 instead of
+    waiting for Phase 12. Phase 12 reuses this same infrastructure for
+    its own queues rather than standing up a second, parallel one.
+-   **`PaymentProvider.createOrder()` reused for the 10% passenger
+    prepayment, mirroring Ride's posting-commission flow exactly.**
+    No new payment-provider work was needed — Phase 7 already built
+    the `StubPaymentProvider` (§37, 2026-08-12) generically enough that
+    Booking creation calls the same interface for a different purpose
+    (prepayment instead of posting commission). Confirms the interface
+    is doing its job as a real seam, not just for Ride.

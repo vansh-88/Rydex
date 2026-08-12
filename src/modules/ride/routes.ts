@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
 import { authorize } from '../../app/middleware/authorize.js';
+import { idempotency } from '../../app/middleware/idempotency.js';
 import { validateBody, validateQuery } from '../../app/middleware/validate.js';
 import * as bookingController from '../booking/controllers/bookingController.js';
 import { createBookingSchema } from '../booking/schemas/bookingSchemas.js';
@@ -16,8 +17,16 @@ rideRouter.use(authenticate);
 // claude.md §8: only a DRIVER may create a ride. Cancel/start/complete are
 // scoped by ownership in the service layer instead (same reasoning as
 // vehicleRouter: every ride's driver is already a DRIVER by construction),
-// so no extra role check is needed there.
-rideRouter.post('/', authorize('DRIVER'), validateBody(createRideSchema), rideController.create);
+// so no extra role check is needed there. claude.md §39: idempotency runs
+// after validation — a request that fails validation had no side effect, so
+// it doesn't need a claimed key.
+rideRouter.post(
+  '/',
+  authorize('DRIVER'),
+  validateBody(createRideSchema),
+  idempotency('POST /rides'),
+  rideController.create,
+);
 
 // Must be registered before GET /:id — otherwise Express would match
 // "search" as the :id param.
@@ -35,4 +44,9 @@ rideRouter.post('/:id/complete', rideController.complete);
 // booking module owns the actual logic (services/repositories/controller);
 // this is routing wiring only, same pattern as admin/routes.ts already
 // composing other modules' functions.
-rideRouter.post('/:id/bookings', validateBody(createBookingSchema), bookingController.create);
+rideRouter.post(
+  '/:id/bookings',
+  validateBody(createBookingSchema),
+  idempotency('POST /rides/:id/bookings'),
+  bookingController.create,
+);

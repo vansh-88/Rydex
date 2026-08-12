@@ -1,12 +1,13 @@
 import { env } from '../../../config/env.js';
 import { prisma } from '../../../infrastructure/database/prismaClient.js';
-import { paymentProvider } from '../../../infrastructure/payments/index.js';
+import { paymentProvider, paymentProviderName } from '../../../infrastructure/payments/index.js';
+import * as paymentRecordService from '../../payment/services/paymentRecordService.js';
 import * as rideRepository from '../../ride/repositories/rideRepository.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as bookingRepository from '../repositories/bookingRepository.js';
 import type { BookingRecord } from '../repositories/bookingRepository.js';
 import type { CreateBookingInput } from '../schemas/bookingSchemas.js';
-import { scheduleBookingExpiry } from './bookingExpiryService.js';
+import { cancelScheduledBookingExpiry, scheduleBookingExpiry } from './bookingExpiryService.js';
 
 export interface BookingDto {
   id: string;
@@ -102,7 +103,24 @@ export async function createBooking(
     receipt: `booking-prepayment:${booking.id}`,
   });
 
-  await bookingRepository.setPrepaymentOrderId(booking.id, order.providerOrderId);
+  // claude.md §38/§97 (2026-08-13): setPrepaymentOrderId + Payment/
+  // Transaction creation happen together, atomically, in a follow-up
+  // transaction — separate from the seat-reservation one above because the
+  // external createOrder() call sits between them (§5.5).
+  await prisma.$transaction(async (tx) => {
+    await bookingRepository.setPrepaymentOrderId(booking.id, order.providerOrderId, tx);
+    await paymentRecordService.recordOrder(tx, {
+      userId: passengerId,
+      bookingId: booking.id,
+      rideId: booking.rideId,
+      type: 'BOOKING_PREPAYMENT',
+      amount: booking.prepaidAmount,
+      currency: BOOKING_CURRENCY,
+      provider: paymentProviderName,
+      providerOrderId: order.providerOrderId,
+    });
+  });
+
   await scheduleBookingExpiry(booking.id, env.BOOKING_PAYMENT_TTL_SECONDS);
 
   return {
@@ -149,6 +167,9 @@ export async function cancelBooking(passengerId: string, bookingId: string): Pro
   if (!cancelled) {
     throw new AppError(409, 'BOOKING_ALREADY_CANCELLED', 'Booking cannot be cancelled from its current state');
   }
+
+  // §97 (2026-08-13): no longer any reason for the TTL job to fire later.
+  await cancelScheduledBookingExpiry(bookingId);
 
   return getBooking(passengerId, bookingId);
 }

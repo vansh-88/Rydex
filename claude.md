@@ -1650,6 +1650,30 @@ a locally-generated order id and does not talk to a real gateway;
 creation a real, swappable call site. Phase 10 adds `RazorpayProvider`
 behind the same interface — no call site above this layer changes.
 
+**Updated 2026-08-13:** `RazorpayProvider` (`src/infrastructure/payments/razorpayProvider.ts`)
+now exists for real, using the official `razorpay` Node SDK for
+`createOrder` and raw `node:crypto` HMAC-SHA256 (Razorpay's documented,
+vendor-specific formula) for `verifyPayment` and the interface's new
+`verifyWebhookSignature` method (see below). `refund` still throws —
+genuinely Phase 11 work, tied to policy that doesn't exist yet (§31/§59).
+The factory (`src/infrastructure/payments/index.ts`) picks
+`RazorpayProvider` when `PAYMENT_PROVIDER_KEY`/`SECRET` are configured,
+otherwise falls back to `StubPaymentProvider`, exactly mirroring
+`infrastructure/resend/index.ts`'s real-vs-console-fallback pattern.
+Verified against Razorpay's real test-mode API (test-mode key, no live
+charges) — `createOrder()` returns genuine `order_...` ids.
+
+**Interface gained one method beyond the original three:**
+`verifyWebhookSignature(rawBody: Buffer, signature: string): boolean`.
+Webhook signature verification is vendor-specific raw crypto (§40) —
+exactly the kind of detail this interface exists to keep out of the
+webhook module/domain layer — so it lives behind `PaymentProvider`
+rather than as a Razorpay-specific import in `webhookService.ts`.
+`StubPaymentProvider` implements it for real too (against the same
+`PAYMENT_PROVIDER_WEBHOOK_SECRET`), so local webhook testing without a
+real Razorpay account still exercises genuine signature verification,
+not a trivial always-true stub.
+
 The domain must not depend directly on Razorpay SDK/API classes.
 
 ------------------------------------------------------------------------
@@ -2320,7 +2344,14 @@ BOOKING_ALREADY_CANCELLED
 
 PAYMENT_FAILED
 PAYMENT_ALREADY_PROCESSED
+PAYMENT_NOT_FOUND
+PAYMENT_PROVIDER_ERROR
 IDEMPOTENCY_CONFLICT
+IDEMPOTENCY_KEY_REQUIRED
+IDEMPOTENCY_KEY_IN_PROGRESS
+
+INVALID_WEBHOOK_SIGNATURE
+INVALID_WEBHOOK_PAYLOAD
 
 REFUND_FAILED
 ```
@@ -3945,3 +3976,42 @@ Record of intentional decisions made after the initial draft, per §91.
     Booking creation calls the same interface for a different purpose
     (prepayment instead of posting commission). Confirms the interface
     is doing its job as a real seam, not just for Ride.
+-   **Payment and Transaction rows are created together, always, by one
+    service (`paymentRecordService`) — never independently.** §38 frames
+    them as two separate concepts (gateway attempt vs. business record)
+    but doesn't explicitly say whether both get written at order-creation
+    time or only Transaction at confirmation time. Resolved: both are
+    created together at order-creation (Payment status `CREATED`,
+    Transaction status `PENDING`), and both are resolved together when
+    the webhook fires — so failed attempts get a financial-history
+    record too, not just successes, matching §38's "financial
+    history/reconciliation record" framing more literally than
+    "only record what succeeded" would.
+-   **Real gap found during testing: a payment that succeeds *after* its
+    booking's seat-hold TTL already expired was silently inconsistent.**
+    If Razorpay's `payment.captured` webhook arrives after
+    `bookingExpiryService`'s BullMQ job already cancelled the booking and
+    released the seat (a genuine race — confirmed by triggering it via a
+    short test TTL), the webhook correctly recorded the Payment/
+    Transaction as `SUCCESS` (the money did move) but
+    `bookingRepository.confirmPayment`'s conditional update silently
+    no-ops (the booking is no longer `PENDING_PAYMENT`), leaving no
+    signal that a passenger was charged for a booking that no longer
+    holds a seat. Resolved *for this phase*: `webhookService` now checks
+    `confirmPayment`'s/`rideRepository.confirmPayment`'s return value and
+    logs an explicit error flagging the case for manual refund review.
+    A full automatic fix (issuing a refund, or race-proofing the TTL job
+    against a concurrently-resolving webhook via a correlated-subquery
+    conditional update) is *not* built — the correct resolution requires
+    real refund policy/mechanics that don't exist until Phase 11
+    (§31/§34/§59), and a sane default `BOOKING_PAYMENT_TTL_SECONDS`
+    (900s) makes the race rare in practice. Revisit when Phase 11 adds
+    refund handling.
+-   **Retroactive Phase 9 cleanup: cancel the scheduled BullMQ expiry job
+    on any terminal booking transition, not just when it fires.**
+    `bookingExpiryService.cancelScheduledBookingExpiry` (new) is called
+    after webhook-driven confirm/fail (this phase) and after a manual
+    passenger cancel (Phase 9's `bookingService.cancelBooking`, patched
+    now). Purely an efficiency cleanup — the job was already safely
+    idempotent either way (§35/§36) — so this doesn't change behavior,
+    only avoids pointless later job execution.

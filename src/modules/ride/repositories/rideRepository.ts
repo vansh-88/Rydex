@@ -115,7 +115,11 @@ const RIDE_ROW_SELECT = `
 // coordinates go through raw SQL isolated to this repository. Status
 // transitions below don't touch these columns and use the normal Prisma
 // Client API instead.
-export async function create(input: CreateRideInput): Promise<RideRecord> {
+//
+// `db` defaults to the global `prisma` client but accepts a transaction
+// client too (claude.md §97 2026-08-13) — Phase 10 needs the ride INSERT
+// and its Payment/Transaction rows created atomically together.
+export async function create(input: CreateRideInput, db: Prisma.TransactionClient = prisma): Promise<RideRecord> {
   const id = randomUUID();
 
   const query = Prisma.sql`
@@ -144,7 +148,7 @@ export async function create(input: CreateRideInput): Promise<RideRecord> {
     RETURNING ${Prisma.raw(RIDE_ROW_SELECT)}
   `;
 
-  const rows = await prisma.$queryRaw<RideRow[]>(query);
+  const rows = await db.$queryRaw<RideRow[]>(query);
 
   const row = rows[0];
   if (!row) {
@@ -237,4 +241,24 @@ export async function releaseSeats(db: Prisma.TransactionClient, rideId: string,
       status = CASE WHEN status = 'FULL' THEN 'OPEN'::ride_status ELSE status END
     WHERE id = ${rideId}::uuid
   `);
+}
+
+// claude.md §19/§40: the posting-commission webhook's two outcomes. Only
+// ever fires from PENDING_PAYMENT — same conditional-update idempotency
+// pattern as everywhere else in this file, so a duplicate webhook delivery
+// is a harmless no-op on the second call.
+export async function confirmPayment(db: Prisma.TransactionClient, id: string): Promise<boolean> {
+  const result = await db.ride.updateMany({
+    where: { id, status: 'PENDING_PAYMENT' },
+    data: { status: 'OPEN' },
+  });
+  return result.count === 1;
+}
+
+export async function failPayment(db: Prisma.TransactionClient, id: string): Promise<boolean> {
+  const result = await db.ride.updateMany({
+    where: { id, status: 'PENDING_PAYMENT' },
+    data: { status: 'CANCELLED' },
+  });
+  return result.count === 1;
 }

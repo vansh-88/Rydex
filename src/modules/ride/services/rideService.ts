@@ -1,5 +1,7 @@
+import { prisma } from '../../../infrastructure/database/prismaClient.js';
 import { mapProvider } from '../../../infrastructure/maps/index.js';
-import { paymentProvider } from '../../../infrastructure/payments/index.js';
+import { paymentProvider, paymentProviderName } from '../../../infrastructure/payments/index.js';
+import * as paymentRecordService from '../../payment/services/paymentRecordService.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
 import * as rideRepository from '../repositories/rideRepository.js';
@@ -87,21 +89,43 @@ export async function createRide(
     receipt: `ride-posting-commission:${driverId}:${input.vehicleId}:${input.departureTime.toISOString()}`,
   });
 
-  const ride = await rideRepository.create({
-    driverId,
-    vehicleId: input.vehicleId,
-    origin: input.origin,
-    destination: input.destination,
-    originAddress: input.originAddress ?? null,
-    destinationAddress: input.destinationAddress ?? null,
-    departureTime: input.departureTime,
-    availableSeats: input.availableSeats,
-    farePerSeat: fare.farePerSeat,
-    distanceMeters: route.distanceMeters,
-    durationSeconds: route.durationSeconds,
-    routeGeometry: route.geometry,
-    postingCommissionAmount,
-    postingCommissionOrderId: order.providerOrderId,
+  // claude.md §38/§97 (2026-08-13): the ride INSERT and its Payment/
+  // Transaction rows are created atomically together — both are internal DB
+  // writes at this point (the external createOrder() call already happened
+  // above), so there's no §5.5 conflict wrapping them in one transaction.
+  const ride = await prisma.$transaction(async (tx) => {
+    const created = await rideRepository.create(
+      {
+        driverId,
+        vehicleId: input.vehicleId,
+        origin: input.origin,
+        destination: input.destination,
+        originAddress: input.originAddress ?? null,
+        destinationAddress: input.destinationAddress ?? null,
+        departureTime: input.departureTime,
+        availableSeats: input.availableSeats,
+        farePerSeat: fare.farePerSeat,
+        distanceMeters: route.distanceMeters,
+        durationSeconds: route.durationSeconds,
+        routeGeometry: route.geometry,
+        postingCommissionAmount,
+        postingCommissionOrderId: order.providerOrderId,
+      },
+      tx,
+    );
+
+    await paymentRecordService.recordOrder(tx, {
+      userId: driverId,
+      bookingId: null,
+      rideId: created.id,
+      type: 'DRIVER_RIDE_FEE',
+      amount: postingCommissionAmount,
+      currency: RIDE_CURRENCY,
+      provider: paymentProviderName,
+      providerOrderId: order.providerOrderId,
+    });
+
+    return created;
   });
 
   return {

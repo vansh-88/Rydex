@@ -126,6 +126,39 @@ enum BookingStatus {
   @@map("booking_status")
 }
 
+// claude.md §38: gateway-level payment-attempt lifecycle. CREATED is set the
+// moment PaymentProvider.createOrder() returns; SUCCESS/FAILED are set only
+// by the webhook (§40) — frontend-reported success never sets this directly.
+enum PaymentStatus {
+  CREATED
+  SUCCESS
+  FAILED
+
+  @@map("payment_status")
+}
+
+// claude.md §38: business-level financial record types. Only
+// DRIVER_RIDE_FEE and BOOKING_PREPAYMENT are produced starting this phase;
+// FINAL_PAYMENT and REFUND are Phase 11 (Settlement) — defined now since
+// the type is a fixed enum, same as RideStatus/BookingStatus already
+// including values unreachable until a later phase.
+enum TransactionType {
+  DRIVER_RIDE_FEE
+  BOOKING_PREPAYMENT
+  FINAL_PAYMENT
+  REFUND
+
+  @@map("transaction_type")
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+
+  @@map("transaction_status")
+}
+
 // --- Models ---
 
 model User {
@@ -156,12 +189,15 @@ model User {
 
   refreshTokens           RefreshToken[]
   documents               UserDocument[]
-  vehicles                Vehicle[]      @relation("VehicleOwner")
-  verifiedVehicles        Vehicle[]      @relation("VehicleVerifiedBy")
-  driverLicenseVerifiedBy User?          @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
-  verifiedDriverLicenses  User[]         @relation("DriverLicenseVerifiedBy")
-  ridesDriven             Ride[]         @relation("RideDriver")
+  vehicles                Vehicle[]        @relation("VehicleOwner")
+  verifiedVehicles        Vehicle[]        @relation("VehicleVerifiedBy")
+  driverLicenseVerifiedBy User?            @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
+  verifiedDriverLicenses  User[]           @relation("DriverLicenseVerifiedBy")
+  ridesDriven             Ride[]           @relation("RideDriver")
   bookings                Booking[]
+  payments                Payment[]
+  transactions            Transaction[]
+  idempotencyKeys         IdempotencyKey[]
 
   @@map("users")
 }
@@ -290,9 +326,11 @@ model Ride {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  driver   User      @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  vehicle  Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  bookings Booking[]
+  driver       User          @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle      Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  bookings     Booking[]
+  payments     Payment[]
+  transactions Transaction[]
 
   @@index([driverId])
   @@index([vehicleId])
@@ -335,10 +373,92 @@ model Booking {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  ride      Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
-  passenger User @relation(fields: [passengerId], references: [id], onDelete: Cascade)
+  ride         Ride          @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  passenger    User          @relation(fields: [passengerId], references: [id], onDelete: Cascade)
+  payments     Payment[]
+  transactions Transaction[]
 
   @@index([rideId])
   @@index([passengerId])
   @@map("bookings")
+}
+
+// claude.md §38: gateway-level payment attempt. Exactly one of
+// rideId/bookingId is set (a driver posting-fee payment vs a passenger
+// prepayment/final-payment) — enforced in application code, not a DB CHECK
+// constraint (Prisma doesn't model arbitrary CHECK constraints declaratively
+// and this isn't worth a hand-written migration addition for now).
+model Payment {
+  id        String  @id @default(uuid()) @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  bookingId String? @map("booking_id") @db.Uuid
+  rideId    String? @map("ride_id") @db.Uuid
+
+  provider          String
+  providerOrderId   String  @unique @map("provider_order_id")
+  providerPaymentId String? @map("provider_payment_id")
+
+  amount   Decimal @db.Decimal(10, 2)
+  currency String
+
+  status PaymentStatus @default(CREATED)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  ride    Ride?    @relation(fields: [rideId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@index([providerPaymentId])
+  @@map("payments")
+}
+
+// claude.md §38: business-level financial history/reconciliation record —
+// "not a wallet." Created alongside its Payment row (§97 2026-08-13) so
+// failed attempts are recorded too, not just successes.
+model Transaction {
+  id        String  @id @default(uuid()) @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  bookingId String? @map("booking_id") @db.Uuid
+  rideId    String? @map("ride_id") @db.Uuid
+
+  type   TransactionType
+  amount Decimal         @db.Decimal(10, 2)
+
+  provider          String
+  providerReference String? @map("provider_reference")
+
+  status TransactionStatus
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  ride    Ride?    @relation(fields: [rideId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@map("transactions")
+}
+
+// claude.md §39. Unique on (userId, key) is what makes the claim step
+// (idempotencyService.claim, an INSERT ... ON CONFLICT DO NOTHING) atomic —
+// two concurrent requests with the same key can't both "win".
+model IdempotencyKey {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  key            String
+  endpoint       String
+  requestHash    String   @map("request_hash")
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("idempotency_keys")
 }

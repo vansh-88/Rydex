@@ -38,3 +38,16 @@ export async function processBookingExpiry(bookingId: string): Promise<void> {
     }
   });
 }
+
+// §97 (2026-08-13): once a booking reaches a terminal-for-the-TTL's-purpose
+// state (confirmed via webhook, failed via webhook, or manually cancelled by
+// the passenger), the scheduled expiry job is pure waste — it'll no-op
+// against processBookingExpiry's own idempotency check anyway, but removing
+// it outright avoids that wasted work at scale. Best-effort: a job that's
+// already running or already fired can't be un-removed, which is fine since
+// the no-op path handles that case correctly regardless.
+export async function cancelScheduledBookingExpiry(bookingId: string): Promise<void> {
+  await bookingExpiryQueue.remove(bookingId).catch((err: unknown) => {
+    console.error(`Failed to remove booking-expiry job for booking ${bookingId}:`, err);
+  });
+}

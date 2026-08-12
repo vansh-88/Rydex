@@ -40,8 +40,21 @@ const envSchema = z.object({
   FCM_PROJECT_ID: z.string().optional(),
   FCM_CLIENT_EMAIL: z.string().optional(),
   FCM_PRIVATE_KEY: z.string().optional(),
+  // Consumed starting Phase 10 (RazorpayProvider, claude.md §37/§40). Stay
+  // optional — without them, the factory falls back to StubPaymentProvider
+  // for local dev, same pattern as Resend's console fallback.
   PAYMENT_PROVIDER_KEY: z.string().optional(),
   PAYMENT_PROVIDER_SECRET: z.string().optional(),
+  // Separate from PAYMENT_PROVIDER_SECRET on purpose — Razorpay signs
+  // webhooks with a distinct secret configured in its dashboard, not the API
+  // key secret used for order/checkout signature verification. Required
+  // even in stub mode: StubPaymentProvider verifies webhook signatures for
+  // real (HMAC-SHA256) using this same secret, so local testing without a
+  // real Razorpay account still exercises genuine signature verification.
+  PAYMENT_PROVIDER_WEBHOOK_SECRET: z.string().min(1),
+
+  // claude.md §39: how long a claimed Idempotency-Key stays valid.
+  IDEMPOTENCY_KEY_TTL_HOURS: z.coerce.number().int().positive().default(24),
 
   // Consumed starting Phase 6 (Map provider, claude.md §17). Geoapify is the
   // initial provider — see the Architecture Change Log (claude.md §97) for

@@ -1411,6 +1411,93 @@ enqueue notification
 
 Never trust frontend payment success as final confirmation.
 
+## Status: complete
+
+Implemented `RazorpayProvider` (`src/infrastructure/payments/razorpayProvider.ts`,
+real `razorpay` SDK + real HMAC-SHA256 signature verification), `Payment`/
+`Transaction`/`IdempotencyKey` Prisma models (migration
+`20260812144013_payment_system`), the full payment module
+(`src/modules/payment/`: repositories, `paymentRecordService`,
+`webhookService`, `POST /api/v1/webhooks/payment`), and
+`Idempotency-Key` middleware (`src/app/middleware/idempotency.ts`) wired
+onto `POST /rides` and `POST /rides/:id/bookings` — the two
+payment-producing endpoints from Phases 7/9.
+
+`PaymentProvider` gained a fourth method, `verifyWebhookSignature`, since
+webhook signing is vendor-specific raw crypto that belongs behind the
+interface, not hardcoded in the webhook module (claude.md §37/§40).
+`StubPaymentProvider` implements it for real (HMAC against
+`PAYMENT_PROVIDER_WEBHOOK_SECRET`) so local testing without a Razorpay
+account still exercises genuine signature verification. The factory
+(`infrastructure/payments/index.ts`) now branches Stub vs. Razorpay on
+configured `PAYMENT_PROVIDER_KEY`/`SECRET`, exactly mirroring Resend's
+real-vs-console-fallback pattern.
+
+Webhook processing (`webhookService.processPaymentWebhook`) runs the
+full claude.md §40 flow in one DB transaction: verify signature →
+identify the `Payment` row by `provider_order_id` → idempotency check
+(conditional `CREATED -> SUCCESS/FAILED`, so a duplicate delivery is a
+no-op) → resolve the matching `Transaction` → apply the ride/booking
+state transition (`PENDING_PAYMENT -> OPEN`/`CANCELLED` for the driver's
+posting fee, `PENDING_PAYMENT -> CONFIRMED`/`PAYMENT_FAILED` for a
+booking's prepayment, releasing seats on failure). Notification
+enqueueing (the last step in claude.md §40's flow) is explicitly not
+built — Phase 12 doesn't exist yet.
+
+Payment and Transaction rows are created together by one function
+(`paymentRecordService.recordOrder`), called from inside the same DB
+transaction as the ride/booking INSERT for ride creation, and from a
+small follow-up transaction (after the external `createOrder()` call,
+per §5.5) for booking creation — see claude.md §97 (2026-08-13) for why
+both records are created together rather than Transaction-only-on-success.
+
+One real bug found and fixed during testing, documented in claude.md §97
+(2026-08-13): a payment webhook arriving *after* a booking's seat-hold
+TTL already expired left the Payment/Transaction correctly `SUCCESS` but
+the booking silently stuck `CANCELLED` with no signal anything was
+wrong. Fixed by checking the conditional state-transition's return value
+and logging an explicit error for manual review — a full fix (automatic
+refund) needs Phase 11's refund policy, which doesn't exist yet, so it's
+deferred rather than invented.
+
+Verified end-to-end against the real stack (no automated test infra
+yet, per the Phase 3 note; `.env` has real Razorpay **test-mode**
+credentials, confirmed via genuine `order_...` ids returned from
+Razorpay's actual API — not the stub):
+
+-   **Idempotency**: missing `Idempotency-Key` → 400
+    `IDEMPOTENCY_KEY_REQUIRED` on both endpoints; a replayed
+    identical request returned the exact cached response (same ride/
+    booking id, byte-identical JSON) without creating a second resource
+    or a second Razorpay order; the same key with a different body → 409
+    `IDEMPOTENCY_CONFLICT`.
+-   **Webhooks**: a real signed `payment.captured` for a ride's posting
+    fee correctly flipped `PENDING_PAYMENT -> OPEN` and resolved
+    Payment/Transaction to `SUCCESS`; the identical webhook re-delivered
+    → 200, idempotent no-op (verified no re-processing); a wrong
+    signature → 401 `INVALID_WEBHOOK_SIGNATURE`; an unrecognized event
+    type (e.g. `order.paid`) → 200, no-op; a webhook for an unknown
+    `order_id` → 404 `PAYMENT_NOT_FOUND` (deliberately retry-worthy, not
+    200 — see claude.md §97 for why); `payment.failed` for a ride's
+    posting fee → `PENDING_PAYMENT -> CANCELLED`; `payment.failed` for a
+    booking holding the ride's last 2 seats → booking ->
+    `PAYMENT_FAILED` and the ride's seats correctly released
+    (`0/FULL -> 2/OPEN`); a `payment.captured` for a booking sent
+    immediately (well before its TTL) → `CONFIRMED`, and confirmed
+    still `CONFIRMED` 10 seconds past the TTL window — proving
+    `cancelScheduledBookingExpiry` actually removed the pending BullMQ
+    job rather than relying solely on the (already idempotent) no-op
+    path.
+
+`npm run typecheck`, `npm run lint`, and `npm run build` all pass.
+
+Not built in this phase, intentionally deferred to Phase 11
+(Cancellation, Refunds, Settlement): `RazorpayProvider.refund()` (still
+throws), the driver-cancellation refund-percentage policy (§31), final
+90% payment collection and 97/3 driver/platform settlement split (§41),
+and automatic refund handling for the late-payment-after-expiry edge
+case found above.
+
 ------------------------------------------------------------------------
 
 # 15. Phase 11 --- Cancellation, Refunds, Settlement
@@ -1856,7 +1943,7 @@ Claude must maintain this checklist.
 [x] Phase 7 — Ride Creation
 [x] Phase 8 — Ride Search
 [x] Phase 9 — Booking
-[ ] Phase 10 — Payment
+[x] Phase 10 — Payment
 [ ] Phase 11 — Cancellation + Settlement
 [ ] Phase 12 — Notifications
 [ ] Phase 13 — Chat

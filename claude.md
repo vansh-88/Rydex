@@ -888,7 +888,16 @@ interface MapProvider {
 
 The ride module depends only on this interface.
 
-The initial implementation may use Mapbox.
+**Updated 2026-08-12 (see §97 Architecture Change Log):** the initial
+implementation is **Geoapify**, not Mapbox as originally drafted here —
+Mapbox's signup flow now requires a payment method before any free-tier
+usage, which conflicts with a hard product constraint of no card on file
+with any mapping/location vendor. Geoapify's free tier (3,000
+credits/day, no card) covers geocoding, routing, and distance-matrix
+needs at Rydex's target scale (§92). This is a provider swap only — the
+interface below, and the "must be replaceable" requirement, are
+unchanged, and Mapbox/Google remain valid future targets if the card
+constraint is ever lifted.
 
 The provider must be replaceable.
 
@@ -3852,3 +3861,24 @@ Record of intentional decisions made after the initial draft, per §91.
     have been updated to match; §18's ride-creation flow and its
     eligibility function must include this check when Phase 7 is
     implemented.
+
+### 2026-08-12
+
+-   **Initial `MapProvider` implementation changed from Mapbox to
+    Geoapify.** §17 named Mapbox as the initial implementation. In
+    practice, Mapbox's account signup now requires a payment method
+    before any free-tier usage is unlockable, which conflicts with an
+    explicit product constraint: no payment method on file with any
+    mapping/location vendor. Researched alternatives (Mapbox, Google
+    Maps Platform, HERE, TomTom, MapTiler, OpenRouteService, LocationIQ,
+    self-hosted OSRM+Nominatim) against that constraint plus free-tier
+    limits, commercial-use terms, and fit for ~10k users (§92); Geoapify
+    was selected as the initial `MapProvider` implementation (no card
+    required, 3,000 credits/day, commercial use allowed with
+    attribution, single API covering geocode/reverseGeocode/route/
+    distance-matrix). OpenRouteService is a documented fallback if
+    Geoapify's quota becomes constraining; self-hosting OSRM+Nominatim
+    is the eventual no-limits option, deferred until traffic actually
+    warrants the operational overhead. The `MapProvider` interface
+    itself (§17) is unchanged — this is a Strategy-pattern provider
+    swap, exactly what the interface exists to make cheap.

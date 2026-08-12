@@ -42,7 +42,13 @@ const envSchema = z.object({
   FCM_PRIVATE_KEY: z.string().optional(),
   PAYMENT_PROVIDER_KEY: z.string().optional(),
   PAYMENT_PROVIDER_SECRET: z.string().optional(),
-  MAP_PROVIDER_API_KEY: z.string().optional(),
+
+  // Consumed starting Phase 6 (Map provider, claude.md §17). Geoapify is the
+  // initial provider — see the Architecture Change Log (claude.md §97) for
+  // why it replaces the originally-named Mapbox.
+  MAP_PROVIDER: z.enum(['geoapify']).default('geoapify'),
+  MAP_PROVIDER_API_KEY: z.string().min(1),
+
   RIDE_ORIGIN_MATCH_RADIUS_METERS: z.coerce.number().int().positive().optional(),
   RIDE_DESTINATION_MATCH_RADIUS_METERS: z.coerce.number().int().positive().optional(),
   DRIVER_COMMISSION_PERCENT: z.coerce.number().optional(),
@@ -51,6 +57,24 @@ const envSchema = z.object({
   PLATFORM_COMMISSION_PERCENT: z.coerce.number().optional(),
   DRIVER_EARLY_CANCEL_REFUND_PERCENT: z.coerce.number().optional(),
   DRIVER_CANCEL_THRESHOLD_HOURS: z.coerce.number().optional(),
+
+  // Consumed starting Phase 6 (HeuristicFareStrategy, claude.md §29). All
+  // values configurable rather than hard-coded, per §29's "avoid uncontrolled
+  // multipliers" requirement.
+  FARE_BASE_FARE: z.coerce.number().nonnegative().default(30),
+  FARE_PRICE_PER_KM: z.coerce.number().nonnegative().default(8),
+  FARE_VEHICLE_MULTIPLIER_HATCHBACK: z.coerce.number().positive().default(1.0),
+  FARE_VEHICLE_MULTIPLIER_SEDAN: z.coerce.number().positive().default(1.15),
+  FARE_VEHICLE_MULTIPLIER_SUV: z.coerce.number().positive().default(1.35),
+  FARE_VEHICLE_MULTIPLIER_MUV: z.coerce.number().positive().default(1.3),
+  // Bounds the traffic multiplier passed in as fare input, so an upstream
+  // bug/bad value can't produce an unreasonable fare.
+  FARE_TRAFFIC_MULTIPLIER_MIN: z.coerce.number().positive().default(0.8),
+  FARE_TRAFFIC_MULTIPLIER_MAX: z.coerce.number().positive().default(2.0),
+  // §29: "driver-rating influence must be bounded" — a 1-star vs 5-star
+  // driver can only move the fare within this band, never further.
+  FARE_RATING_MULTIPLIER_MIN: z.coerce.number().positive().default(0.95),
+  FARE_RATING_MULTIPLIER_MAX: z.coerce.number().positive().default(1.05),
 });
 
 function loadEnv(): z.infer<typeof envSchema> {

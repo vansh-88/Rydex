@@ -773,6 +773,60 @@ configuration.
 
 Test deterministic fare calculations thoroughly.
 
+## Status: complete
+
+Implemented `MapProvider` (`src/infrastructure/maps/mapProvider.ts`) —
+`geocode`/`reverseGeocode`/`getRoute`/`getDistanceMatrix`, exactly as
+specified in claude.md §17 — with `GeoapifyMapProvider` as the concrete
+implementation (`src/infrastructure/maps/geoapifyMapProvider.ts`), wired
+up via a factory (`src/infrastructure/maps/index.ts`) that switches on a
+new `MAP_PROVIDER` env var, mirroring the existing Resend/Cloudinary
+factory pattern. **Geoapify replaces the originally-planned Mapbox** —
+see claude.md §17/§97 (2026-08-12) for the full reasoning: Mapbox's
+signup now requires a card, which conflicts with an explicit
+no-payment-method constraint; Geoapify was chosen after comparing it
+against OpenRouteService, LocationIQ, MapTiler, and self-hosted
+OSRM+Nominatim.
+
+Also implemented the Fare engine under a new `ride` module (only its
+`strategies/`/`services/` slice — controllers/routes/repositories are
+Phase 7's job): `FareStrategy` interface + `HeuristicFareStrategy`
+(`src/modules/ride/strategies/`) implementing claude.md §29's formula
+(`baseFare + distanceKm * pricePerKm`, then bounded vehicle/traffic/
+rating multipliers — rating multiplier is linearly interpolated between
+configured min/max bounds across the 1-5 rating range, per §29's
+"driver-rating influence must be bounded"), and `calculateFare()`
+(`src/modules/ride/services/fareService.ts`) as the single call site the
+future Ride module will use, taking an injectable `FareStrategy` for
+testability. All fare inputs (base fare, price/km, per-`VehicleType`
+multipliers, traffic/rating multiplier bounds) are new `FARE_*` env vars
+— nothing hard-coded, per §29/§85.
+
+No automated test infra exists yet (per the Phase 3 note), so this was
+verified manually with a temporary script exercising the real Geoapify
+API and the real fare formula end-to-end (deleted after verification,
+not committed): geocode/reverseGeocode/getRoute/getDistanceMatrix all
+returned correctly-shaped real results for Bangalore addresses
+(Koramangala, Whitefield, Jayanagar); a nonexistent address correctly
+threw `GEOCODE_NOT_FOUND` instead of silently returning nothing; fare
+calculations were checked by hand against the formula for a ~22km
+sedan/hatchback ride (multiplier ratio matched exactly), a 5-star SUV
+ride with high traffic input (rating and traffic multipliers both
+applied and matched hand-calculated values), a 1-star sedan ride
+(multiplier correctly pulled fare down, not up), an intentionally
+out-of-range traffic multiplier (999) to confirm clamping actually
+clamps to the configured max rather than exploding the fare, and a
+zero-distance ride (fare correctly reduces to exactly the base fare).
+`npm run typecheck`, `npm run lint`, and `npm run build` all pass.
+
+Not built in this phase (intentionally, per steps.md §10's own scope and
+claude.md §87): no ride HTTP endpoints, no ride persistence, no map
+matching (claude.md §17 interface still has no `mapMatch` method — no
+current requirement drives adding one), no map-tile/rendering concern
+(that's a frontend SDK choice, outside `MapProvider` entirely). Phase 7
+consumes both `mapProvider` and `calculateFare()` when ride creation is
+built.
+
 ------------------------------------------------------------------------
 
 # 11. Phase 7 --- Ride Creation + Lifecycle
@@ -1573,7 +1627,7 @@ Claude must maintain this checklist.
 [x] Phase 4.5 — Driver Upgrade (License Verification)
 [x] Phase 5 — Vehicle + Documents
 [x] Phase 5.5 — Admin Verification Dashboard
-[ ] Phase 6 — Map + Fare
+[x] Phase 6 — Map + Fare
 [ ] Phase 7 — Ride Creation
 [ ] Phase 8 — Ride Search
 [ ] Phase 9 — Booking

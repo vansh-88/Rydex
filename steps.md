@@ -1079,6 +1079,69 @@ ties
 
 Use `EXPLAIN ANALYZE` to verify spatial indexes are actually being used.
 
+## Status: complete
+
+Implemented `GET /api/v1/rides/search` (`src/modules/ride/`), registered
+before `GET /:id` in the router since Express would otherwise match
+`search` as the `:id` param. Query params: `date`, `pickupLat/Lng`,
+`destinationLat/Lng`, `sort` (default `DEPARTURE_TIME`), `cursor`,
+`limit` — validated by a new `validateQuery` middleware
+(`app/middleware/validate.ts`) that stores the coerced result on
+`req.validatedQuery` rather than reassigning `req.query`, since Express 5
+makes `req.query` a getter-only property (confirmed directly in
+`express/lib/request.js` before writing this — reassigning it throws).
+
+`rideSearchRepository.search()` is one hand-written raw-SQL query
+(claude.md §77) joining `rides`/`vehicles`/`users`, using
+`ST_DWithin`/`ST_Distance` for the 10km radius match and distance
+sorting (never JS distance math, never a per-result MapProvider call —
+§23). The date filter converts the requested Asia/Kolkata calendar date
+into a UTC `[start, end)` range (`utils/kolkataDate.ts`) — a hardcoded
+`+05:30` offset is correct here specifically because India has used a
+single fixed offset with no DST since 1945, not a general timezone
+shortcut. Sort options map through a fixed internal switch
+(`sortExpression`) to one of five whitelisted SQL fragments — the client
+only ever sends the enum value, never SQL (§25). Cursor pagination
+(§26) is keyset-based: `(sortExpr, id) > (cursorValue, cursorId)`,
+base64url-encoded JSON, rejected with `INVALID_CURSOR` if malformed or
+minted for a different sort order than the current request. `available_seats
+> 0 AND status IN ('OPEN','FULL')` remains the authoritative "bookable"
+condition (§22 — `FULL` alone isn't sufficient). `DRIVER_RATING` sorts
+via `COALESCE(u.rating_average, 6)` so an unrated driver sorts last
+without breaking the keyset comparison (a `NULL` in a row-comparison
+tuple isn't a total order).
+
+Verified against the real Postgres/PostGIS container with 17 seeded
+rides at precisely controlled distances (computed via an equirectangular
+offset from a fixed reference point — accurate to well under 1km at this
+scale, more than enough margin for 10km-boundary tests) and precisely
+controlled dates/status/seats/fares (created through the real
+`POST /rides` endpoint, then adjusted via direct SQL for the scenarios
+the HTTP API can't produce yet — `OPEN` status, since Phase 10's webhook
+doesn't exist; specific fares/times/seat counts for deterministic sort
+tests): origin exactly inside (9900m) vs exactly outside (10100m) the
+10km radius; same for destination; both-inside, one-outside (both
+directions), and both-outside combinations; a ride on the wrong date
+correctly excluded; zero-seats and `CANCELLED` rides correctly excluded;
+all 9 genuinely-matching rides returned. All five sort orders verified
+correct against hand-computed expected orderings, including three- and
+seven-way ties resolved by ascending `id` exactly as predicted (`DEPARTURE_TIME`
+and `PICKUP_DISTANCE` ties; a `DRIVER_RATING` sort where every ride
+shared the same driver, so the entire result fell back to pure
+id-ascending order — a stronger tie-break test than a partial tie).
+Cursor pagination walked all 5 pages at `limit=2` sorted by `FARE`,
+correctly splitting a tied pair (150, 150) across a page boundary with
+no duplicate or missing rows across 9 total items. Verified error paths:
+malformed cursor and a cursor minted under a different sort → 400
+`INVALID_CURSOR`; invalid date format and missing required query params →
+400 `VALIDATION_ERROR`; `limit=1000` silently clamped to
+`RIDE_SEARCH_MAX_LIMIT` rather than erroring; missing auth → 401.
+`EXPLAIN ANALYZE` against the real search query confirmed `Bitmap Index
+Scan` on both `rides_origin_gist` and `rides_destination_gist` (combined
+via `BitmapAnd` with the `departure_time`/`status` btree index) — the
+spatial GiST indexes are actually used, not sequentially scanned. `npm
+run typecheck`, `npm run lint`, and `npm run build` all pass.
+
 ------------------------------------------------------------------------
 
 # 13. Phase 9 --- Booking + Seat Concurrency
@@ -1699,7 +1762,7 @@ Claude must maintain this checklist.
 [x] Phase 5.5 — Admin Verification Dashboard
 [x] Phase 6 — Map + Fare
 [x] Phase 7 — Ride Creation
-[ ] Phase 8 — Ride Search
+[x] Phase 8 — Ride Search
 [ ] Phase 9 — Booking
 [ ] Phase 10 — Payment
 [ ] Phase 11 — Cancellation + Settlement

@@ -49,8 +49,12 @@ const envSchema = z.object({
   MAP_PROVIDER: z.enum(['geoapify']).default('geoapify'),
   MAP_PROVIDER_API_KEY: z.string().min(1),
 
-  RIDE_ORIGIN_MATCH_RADIUS_METERS: z.coerce.number().int().positive().optional(),
-  RIDE_DESTINATION_MATCH_RADIUS_METERS: z.coerce.number().int().positive().optional(),
+  // Consumed starting Phase 8 (ride search, claude.md §20/§85).
+  RIDE_ORIGIN_MATCH_RADIUS_METERS: z.coerce.number().int().positive().default(10000),
+  RIDE_DESTINATION_MATCH_RADIUS_METERS: z.coerce.number().int().positive().default(10000),
+  // claude.md §26: cursor-pagination limit, configurable and capped server-side.
+  RIDE_SEARCH_DEFAULT_LIMIT: z.coerce.number().int().positive().default(20),
+  RIDE_SEARCH_MAX_LIMIT: z.coerce.number().int().positive().default(50),
   // Consumed starting Phase 7 (commissionService, claude.md §30).
   DRIVER_COMMISSION_PERCENT: z.coerce.number().positive().default(5),
   PASSENGER_PREPAYMENT_PERCENT: z.coerce.number().optional(),

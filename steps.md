@@ -886,6 +886,76 @@ CANCELLED
 
 Do not allow arbitrary status mutation.
 
+## Status: complete
+
+Implemented all five endpoints (`src/modules/ride/`). Notable
+architectural gap found and closed along the way: Phase 6 was supposed to
+stand up `PaymentProvider` (steps.md Phase 6 goal explicitly lists it
+alongside MapProvider/FareStrategy) but only built the latter two. Ride
+creation's flow (step 12: "create payment order for posting commission")
+needs a real call site, so this phase added the interface +
+`StubPaymentProvider` (`src/infrastructure/payments/`) that Phase 6
+should have included — see claude.md §37 (2026-08-12). It generates a
+locally-referenced order id, not a real charge; Phase 10 swaps in
+`RazorpayProvider` behind the same interface.
+
+New `Ride` Prisma model (migration `20260812123854_ride_creation`):
+`origin`/`destination` are `Unsupported("geography(Point,4326)")` since
+Prisma Client has no native geography type, so the ride repository
+(`src/modules/ride/repositories/rideRepository.ts`) reads/writes them via
+raw SQL (`Prisma.sql`/`Prisma.raw`, claude.md §77) using
+`ST_MakePoint`/`ST_X`/`ST_Y` — every other column (including the
+`PENDING_PAYMENT`/`OPEN`/`FULL`/`STARTED`/`COMPLETED`/`CANCELLED` status
+transitions) goes through the normal Prisma Client API. GiST indexes on
+`origin`/`destination` were hand-added to the generated migration SQL
+(claude.md §16) since Prisma can't declare `@@index` on an `Unsupported`
+field.
+
+Vehicle eligibility for ride creation (ownership + `ACTIVE` +
+`VERIFIED` + seat capacity, claude.md §8/§97) lives in one function,
+`assertVehicleEligibleForRide`
+(`src/modules/ride/services/vehicleEligibilityService.ts`), reused as
+claude.md §96 says it should be. Commission calculation
+(`src/modules/ride/services/commissionService.ts`) centralizes the 5%
+posting-fee formula (§30) in one place. Every external call
+(`MapProvider.getRoute`, `PaymentProvider.createOrder`) happens before
+the single ride INSERT — no external call sits inside a DB transaction
+(§5.5).
+
+Not built in this phase, intentionally deferred: cancellation
+refunds/booking-cascade (Phase 11 — no Booking/Payment/Transaction
+tables exist yet), the actual `PENDING_PAYMENT -> OPEN` webhook
+transition (Phase 10 — no way to reach `OPEN` in this phase except a
+direct DB update for testing), ride search (Phase 8).
+
+Verified end-to-end against the real Postgres/Geoapify/Cloudinary stack
+(no automated test infra yet, per the Phase 3 note; dev server run with
+`RESEND_API_KEY`/`RESEND_FROM_EMAIL` temporarily blanked so OTPs logged
+to console instead of emailing, since a real Resend key is configured in
+this environment's `.env`): took a `PASSENGER` through the full
+driver-license approval flow to `DRIVER`, confirmed the refreshed access
+token carries the new role (mirrors the Phase 4.5 verification of the
+same claim), created and admin-verified a vehicle, then created a real
+ride — Geoapify returned a real 19.7 km / ~18.5 min route between
+Koramangala and Whitefield, fare computed to ₹188/seat (hatchback), and
+posting commission to ₹28 (188 × 3 seats × 5%, rounded), matching hand
+calculation exactly; geography columns round-tripped correctly
+(confirmed via `ST_X`/`ST_Y` directly in Postgres). Verified: a
+`PASSENGER` creating a ride → 403 `FORBIDDEN`; a past `departureTime` →
+400 `VALIDATION_ERROR`; seats exceeding vehicle capacity → 409
+`VEHICLE_NOT_ELIGIBLE`; a nonexistent vehicle → 404 `VEHICLE_NOT_FOUND`;
+an unverified (`PENDING`) vehicle → 409 `VEHICLE_NOT_ELIGIBLE`; `GET
+/rides/:id` by a non-owner passenger succeeds (rides are readable by
+anyone, unlike vehicles); a non-owner calling `/cancel` gets 404 (not
+403 — ownership existence isn't leaked, same pattern as vehicles);
+`start` on a `PENDING_PAYMENT` ride → 409 `INVALID_RIDE_STATE`;
+`complete` before `start` → 409; a full happy-path lifecycle
+(`PENDING_PAYMENT` →manual DB flip→ `OPEN` → `start` → `STARTED` →
+`complete` → `COMPLETED`) succeeded, with a second `start` call on the
+now-`STARTED` ride correctly rejected; cancelling an already-`CANCELLED`
+or `COMPLETED` ride both correctly rejected with 409. `npm run
+typecheck`, `npm run lint`, and `npm run build` all pass.
+
 ------------------------------------------------------------------------
 
 # 12. Phase 8 --- Ride Search + PostGIS
@@ -1628,7 +1698,7 @@ Claude must maintain this checklist.
 [x] Phase 5 — Vehicle + Documents
 [x] Phase 5.5 — Admin Verification Dashboard
 [x] Phase 6 — Map + Fare
-[ ] Phase 7 — Ride Creation
+[x] Phase 7 — Ride Creation
 [ ] Phase 8 — Ride Search
 [ ] Phase 9 — Booking
 [ ] Phase 10 — Payment

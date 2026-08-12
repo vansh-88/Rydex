@@ -1627,6 +1627,18 @@ interface PaymentProvider {
 }
 ```
 
+**Updated 2026-08-12:** the interface above and a `StubPaymentProvider`
+exist as of Phase 7 (`src/infrastructure/payments/`) — Phase 6 should
+have stood this up per §87/steps.md Phase 6 but only built
+MapProvider/FareStrategy; the gap surfaced while implementing Phase 7's
+ride creation, which needs *something* behind `createOrder()` to persist
+an order reference against. `StubPaymentProvider.createOrder()` returns
+a locally-generated order id and does not talk to a real gateway;
+`verifyPayment`/`refund` throw (unused until Phase 10/11). This satisfies
+"do not implement payment behavior fully yet" (§87) while giving ride
+creation a real, swappable call site. Phase 10 adds `RazorpayProvider`
+behind the same interface — no call site above this layer changes.
+
 The domain must not depend directly on Razorpay SDK/API classes.
 
 ------------------------------------------------------------------------

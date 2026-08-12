@@ -93,6 +93,21 @@ enum DriverLicenseStatus {
   @@map("driver_license_status")
 }
 
+// claude.md §19: PENDING_PAYMENT exists because ride creation requires the
+// driver's posting commission (§30), confirmed asynchronously/webhook-driven
+// (§40, Phase 10) — a ride can't become searchable (OPEN) within the same
+// request that created it.
+enum RideStatus {
+  PENDING_PAYMENT
+  OPEN
+  FULL
+  STARTED
+  COMPLETED
+  CANCELLED
+
+  @@map("ride_status")
+}
+
 // --- Models ---
 
 model User {
@@ -127,6 +142,7 @@ model User {
   verifiedVehicles        Vehicle[]      @relation("VehicleVerifiedBy")
   driverLicenseVerifiedBy User?          @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
   verifiedDriverLicenses  User[]         @relation("DriverLicenseVerifiedBy")
+  ridesDriven             Ride[]         @relation("RideDriver")
 
   @@map("users")
 }
@@ -189,6 +205,7 @@ model Vehicle {
   owner      User              @relation("VehicleOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   verifiedBy User?             @relation("VehicleVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
   documents  VehicleDocument[]
+  rides      Ride[]
 
   @@index([ownerId])
   @@map("vehicles")
@@ -208,4 +225,57 @@ model VehicleDocument {
 
   @@index([vehicleId])
   @@map("vehicle_documents")
+}
+
+// claude.md §15/§16/§18. origin/destination are `Unsupported` because Prisma
+// Client has no native geography type — the ride repository reads/writes
+// them via raw SQL (claude.md §77) using ST_MakePoint/ST_X/ST_Y. Every other
+// column is normal Prisma Client access. GiST indexes on origin/destination
+// are added by hand in the migration SQL (Prisma can't declare @@index on an
+// Unsupported field) — see claude.md §16.
+model Ride {
+  id        String @id @default(uuid()) @db.Uuid
+  driverId  String @map("driver_id") @db.Uuid
+  vehicleId String @map("vehicle_id") @db.Uuid
+
+  origin      Unsupported("geography(Point,4326)")
+  destination Unsupported("geography(Point,4326)")
+
+  // Free-text labels for display only — never used in distance/route math.
+  originAddress      String? @map("origin_address")
+  destinationAddress String? @map("destination_address")
+
+  departureTime DateTime @map("departure_time") @db.Timestamptz(3)
+
+  availableSeats Int @map("available_seats")
+  totalSeats     Int @map("total_seats")
+
+  // §29: fare is calculated once at creation and persisted — never
+  // recalculated from current pricing configuration.
+  farePerSeat Decimal @map("fare_per_seat") @db.Decimal(10, 2)
+
+  distanceMeters  Int    @map("distance_meters")
+  durationSeconds Int    @map("duration_seconds")
+  // Raw GeoJSON geometry from the MapProvider, stored as-is (opaque to SQL).
+  routeGeometry   String @map("route_geometry")
+
+  // §30: driver's 5% posting commission, calculated once and persisted.
+  // §37/§97 (2026-08-12): no real Payment/Transaction table exists yet
+  // (Phase 10) — orderId is the provider's reference so Phase 10's webhook
+  // can find this ride when the stub PaymentProvider is replaced with Razorpay.
+  postingCommissionAmount  Decimal @map("posting_commission_amount") @db.Decimal(10, 2)
+  postingCommissionOrderId String  @map("posting_commission_order_id")
+
+  status RideStatus @default(PENDING_PAYMENT)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  driver  User    @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  @@index([driverId])
+  @@index([vehicleId])
+  @@index([departureTime, status])
+  @@map("rides")
 }

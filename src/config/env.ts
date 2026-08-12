@@ -51,7 +51,8 @@ const envSchema = z.object({
 
   RIDE_ORIGIN_MATCH_RADIUS_METERS: z.coerce.number().int().positive().optional(),
   RIDE_DESTINATION_MATCH_RADIUS_METERS: z.coerce.number().int().positive().optional(),
-  DRIVER_COMMISSION_PERCENT: z.coerce.number().optional(),
+  // Consumed starting Phase 7 (commissionService, claude.md §30).
+  DRIVER_COMMISSION_PERCENT: z.coerce.number().positive().default(5),
   PASSENGER_PREPAYMENT_PERCENT: z.coerce.number().optional(),
   FINAL_PAYMENT_PERCENT: z.coerce.number().optional(),
   PLATFORM_COMMISSION_PERCENT: z.coerce.number().optional(),

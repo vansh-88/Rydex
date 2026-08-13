@@ -101,6 +101,34 @@ const envSchema = z.object({
   // driver can only move the fare within this band, never further.
   FARE_RATING_MULTIPLIER_MIN: z.coerce.number().positive().default(0.95),
   FARE_RATING_MULTIPLIER_MAX: z.coerce.number().positive().default(1.05),
+
+  // Consumed starting Phase 13.5 (AI support chatbot, claude.md §96.5).
+  // Gemini is the initial provider (originally speced as Grok — corrected
+  // before implementation, claude.md §97 2026-08-16 — since a Gemini API
+  // key is what's actually available). GEMINI_API_KEY stays optional: the
+  // factory falls back to ConsoleAIProvider for local dev without one, same
+  // pattern as Resend/FCM.
+  AI_PROVIDER: z.enum(['gemini']).default('gemini'),
+  GEMINI_API_KEY: z.string().optional(),
+  // An alias, not a pinned version, so a model retirement doesn't break the
+  // chatbot (`gemini-2.0-flash` was already retired mid-implementation).
+  // The *lite* alias specifically: free-tier quota is per-model-per-day and
+  // the flagship alias (`gemini-flash-latest`) carries a very small daily
+  // allowance, while a support bot answering FAQs and simple tool lookups
+  // doesn't need flagship reasoning. Pin an exact model here if that
+  // trade-off ever changes.
+  GEMINI_MODEL: z.string().min(1).default('gemini-flash-lite-latest'),
+
+  // claude.md §96.5 cost-control knobs — all configurable rather than
+  // hard-coded, per the same reasoning as the fare/business-rule constants
+  // above.
+  SUPPORT_CHAT_MAX_MESSAGE_LENGTH: z.coerce.number().int().positive().default(2000),
+  SUPPORT_CHAT_MAX_HISTORY_MESSAGES: z.coerce.number().int().positive().default(20),
+  SUPPORT_CHAT_PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  SUPPORT_CHAT_MAX_TOOL_ROUNDS: z.coerce.number().int().positive().default(2),
+  SUPPORT_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  SUPPORT_CHAT_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  SUPPORT_CHAT_DAILY_MESSAGE_LIMIT: z.coerce.number().int().positive().default(50),
 });
 
 function loadEnv(): z.infer<typeof envSchema> {

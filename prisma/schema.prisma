@@ -184,6 +184,45 @@ enum NotificationType {
   @@map("notification_type")
 }
 
+// claude.md §96.5 (Phase 13.5): the AI support chatbot's own conversation
+// lifecycle — distinct from BookingStatus/RideStatus. ESCALATED plus
+// escalationReason/escalatedAt on SupportConversation below are the only
+// concession to a future human-support handoff (claude.md §9-style
+// escalation) — no ticket/queue system exists yet.
+enum SupportConversationStatus {
+  OPEN
+  RESOLVED
+  ESCALATED
+
+  @@map("support_conversation_status")
+}
+
+// claude.md §96.5: mirrors the OpenAI/Gemini-compatible tool-calling
+// message-role vocabulary directly, since that's the wire format
+// AIProvider.complete() is built around. TOOL is the tool-execution
+// result fed back to the model; ASSISTANT rows may carry a null `content`
+// with only `toolCalls` set (a pure tool-call turn) instead of user-facing
+// text.
+enum SupportMessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+  TOOL
+
+  @@map("support_message_role")
+}
+
+// claude.md §96.5: AI provider failures are persisted, not just thrown —
+// so the conversation record shows a failed turn rather than silently
+// missing one. Distinct from BookingStatus/PaymentStatus's richer state
+// machines: this is just "did this one turn's provider call succeed."
+enum SupportMessageStatus {
+  COMPLETED
+  FAILED
+
+  @@map("support_message_status")
+}
+
 // --- Models ---
 
 // claude.md §47 (Phase 13): one conversation per (ride, passenger) pair —
@@ -251,20 +290,21 @@ model User {
 
   refreshTokens            RefreshToken[]
   documents                UserDocument[]
-  vehicles                 Vehicle[]        @relation("VehicleOwner")
-  verifiedVehicles         Vehicle[]        @relation("VehicleVerifiedBy")
-  driverLicenseVerifiedBy  User?            @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
-  verifiedDriverLicenses   User[]           @relation("DriverLicenseVerifiedBy")
-  ridesDriven              Ride[]           @relation("RideDriver")
+  vehicles                 Vehicle[]             @relation("VehicleOwner")
+  verifiedVehicles         Vehicle[]             @relation("VehicleVerifiedBy")
+  driverLicenseVerifiedBy  User?                 @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
+  verifiedDriverLicenses   User[]                @relation("DriverLicenseVerifiedBy")
+  ridesDriven              Ride[]                @relation("RideDriver")
   bookings                 Booking[]
   payments                 Payment[]
   transactions             Transaction[]
   idempotencyKeys          IdempotencyKey[]
   devices                  UserDevice[]
   notifications            Notification[]
-  conversationsAsDriver    Conversation[]   @relation("ConversationDriver")
-  conversationsAsPassenger Conversation[]   @relation("ConversationPassenger")
+  conversationsAsDriver    Conversation[]        @relation("ConversationDriver")
+  conversationsAsPassenger Conversation[]        @relation("ConversationPassenger")
   messages                 Message[]
+  supportConversations     SupportConversation[]
 
   @@map("users")
 }
@@ -575,4 +615,73 @@ model Notification {
 
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+// claude.md §96.5 (Phase 13.5): the AI support chatbot's own conversation —
+// distinct from Conversation/Message above, which remain the
+// passenger-driver chat (§47). No ride/booking FK: a support conversation
+// is scoped to a user, not tied to any single ride.
+model SupportConversation {
+  id     String                    @id @default(uuid()) @db.Uuid
+  userId String                    @map("user_id") @db.Uuid
+  status SupportConversationStatus @default(OPEN)
+
+  // Nullable — only ever set if/when a future human-escalation flow sets
+  // status -> ESCALATED. No ticket/case table exists yet (claude.md §6/§96.5).
+  escalationReason String?   @map("escalation_reason")
+  escalatedAt      DateTime? @map("escalated_at") @db.Timestamptz(3)
+
+  lastMessageAt DateTime @map("last_message_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages SupportMessage[]
+
+  @@index([userId, lastMessageAt])
+  @@map("support_conversations")
+}
+
+// claude.md §96.5: one row per turn in the tool-calling loop — a single
+// user message can produce an ASSISTANT row with only `toolCalls` set (no
+// user-facing text yet), one or more TOOL rows with the executed results,
+// and a final ASSISTANT row with `content` set. No senderId/userId column
+// (unlike Message) — role already distinguishes USER from ASSISTANT/TOOL,
+// and every row's actor is either "the user" or "the model", never
+// ambiguous within a single-user conversation.
+model SupportMessage {
+  id             String             @id @default(uuid()) @db.Uuid
+  conversationId String             @map("conversation_id") @db.Uuid
+  role           SupportMessageRole
+
+  content String?
+
+  // Set on a TOOL-role row: which of the assistant's requested calls this
+  // result answers, and the tool's name (denormalized for readability —
+  // the id alone would require joining back to the ASSISTANT row's
+  // toolCalls JSON to know which function ran).
+  toolCallId    String? @map("tool_call_id")
+  toolName      String? @map("tool_name")
+  // Denormalized from the assistant's toolCalls[i].arguments so a TOOL row
+  // is independently readable without joining back to the ASSISTANT row.
+  toolArguments Json?   @map("tool_arguments")
+  // Set on an ASSISTANT-role row that requests one or more tool calls —
+  // never includes a userId/identity field (claude.md §96.5: the model's
+  // only degree of freedom is which tool + which resource id).
+  toolCalls     Json?   @map("tool_calls")
+
+  provider         String?
+  model            String?
+  promptTokens     Int?    @map("prompt_tokens")
+  completionTokens Int?    @map("completion_tokens")
+
+  status    SupportMessageStatus @default(COMPLETED)
+  errorCode String?              @map("error_code")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("support_messages")
 }

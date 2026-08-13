@@ -2273,6 +2273,110 @@ dedicated logging/observability infrastructure
     errorHandler middleware like every other module)
 ```
 
+## Status: complete
+
+Implemented `SupportConversation`/`SupportMessage` Prisma models (migration
+`20260813070602_support_chatbot`), `src/infrastructure/ai/` (the
+`AIProvider` interface plus `GeminiProvider` and `ConsoleAIProvider`,
+selected by the same configured-vs-fallback factory every other provider
+in this codebase uses), and the full `src/modules/support/` module wired
+at `/api/v1/support`.
+
+**Provider is Gemini, not Grok** — corrected before implementation (see
+`claude.md` §97, 2026-08-16) since a Gemini API key is what was actually
+available. `ChatbotService` imports only the interface-typed singleton, so
+this was a pure infrastructure choice; nothing in the module changed.
+
+**The tool layer works as specified**: tool JSON-schemas exposed to the
+model contain no `userId`/identity parameter, and `executeToolCall` binds
+`userId` from the authenticated request context, dispatching only to
+existing ownership-checked service methods
+(`bookingService.getBooking`/`getMyRecentBookings`,
+`rideService.getRide`/`getMyRecentRidesAsDriver` — the two `getMy*`
+methods are new read-only additions). A tool failure becomes a tool-result
+message fed back to the model rather than aborting the turn, so the
+assistant can say it couldn't find something instead of the request 500ing.
+
+### Four real bugs found and fixed during verification
+
+1.  **`gemini-2.0-flash` is no longer served** — the API returns 404
+    "no longer available" for it. Default is now the
+    `gemini-flash-lite-latest` **alias**, so a future model retirement
+    doesn't break this again; `GEMINI_MODEL` stays configurable for
+    pinning. The *lite* alias specifically, for a reason found the hard
+    way during verification: free-tier quota is
+    `GenerateRequestsPerDayPerProjectPerModel`, i.e. **per model, per
+    day**, and the flagship alias (`gemini-flash-latest` →
+    `gemini-3.6-flash`) carries only ~20 requests/day — exhausted almost
+    immediately by ordinary testing. The lite alias has its own separate,
+    far more generous budget, and a support bot answering FAQs and doing
+    simple tool lookups does not need flagship reasoning. Note also that
+    `gemini-2.5-*` models return "no longer available **to new users**"
+    on a fresh key, so they are not a fallback.
+2.  **Gemini rejects a non-object `functionResponse.response`** ("Proto
+    field is not repeating, cannot start list") — our tool results are
+    frequently JSON arrays (`getMyRecentBookings` returns `[]`). Anything
+    that isn't already a plain object is now wrapped as `{ result: ... }`.
+3.  **Newer Gemini models require a `thought_signature` to be echoed
+    back** on any `functionCall` part replayed in a later turn, or the
+    request is rejected outright — which broke *every* multi-turn
+    conversation that had made a tool call. Fixed by adding an opaque
+    `providerState` field to `AIToolCall` in the provider-agnostic
+    interface (deliberately not named `thoughtSignature`, so the vendor
+    concept doesn't leak into the abstraction); it is persisted inside
+    the `tool_calls` JSON and replayed verbatim. Verified it round-trips
+    through Postgres, so this survives a server restart mid-conversation.
+    Also note `response.functionCalls` (the SDK's flattened getter)
+    silently drops it — the provider reads the raw candidate parts instead.
+4.  **`AI_PROVIDER_RATE_LIMITED` was specified but never mapped.** A
+    provider quota rejection was collapsing into a generic
+    `AI_PROVIDER_ERROR`. Now detected (upstream 429) and surfaced as its
+    own code with a 503. The vendor's 429 is deliberately not forwarded
+    as a 429 to our client — Rydex's own per-user limits are what govern
+    the caller.
+
+### Verified end-to-end against the real stack
+
+Real Postgres/Redis and the **real Gemini API** (no automated test infra,
+per the standing project note; `RESEND_API_KEY` temporarily blanked for
+console-logged OTPs, restored afterward). Confirmed: a policy question is
+answered from the configured business-rule constants (correct 5%/18h/2pp
+figures, proving the system prompt is built from config and not the
+model's own guesses); multi-turn follow-ups retain context; tool-calling
+returns real data; **a request for another user's booking id — with the
+prompt explicitly claiming "it is my booking" — is refused by the tool
+layer and reported as not-found, with no data leaked**; a request for a
+driver's phone number and home address produced no invented data;
+conversation ownership is enforced on both read and post with an
+indistinguishable `SUPPORT_CONVERSATION_NOT_FOUND` (a second user sees
+neither the conversation nor its existence); unauthenticated access 401s;
+empty/overlong messages and malformed cursors are rejected by validation;
+cursor pagination walks pages correctly. Rate limiting was exercised with
+a 13-request burst against a limit of 10/60s — exactly 3 got `429`.
+All four tools were individually exercised against real data
+(`getMyRecentBookings`, `getBookingStatus`, `getMyRecentRidesAsDriver`,
+`getRideStatus` — the last correctly reporting a real ride as
+`CANCELLED`). Both provider failure mappings were confirmed against
+genuine upstream conditions, not simulated: `AI_PROVIDER_TIMEOUT` from a
+real abort, `AI_PROVIDER_RATE_LIMITED` from a real quota rejection. The
+`ConsoleAIProvider` no-key path was exercised separately and returns a
+well-formed result with no tool calls, so the loop terminates in one
+round when unconfigured. `npm run typecheck`, `npm run lint`, and
+`npm run build` all pass.
+
+One observed-and-accepted behavior: a turn that fails at the provider
+leaves the user's message persisted with no assistant reply (by design —
+a failure must never lose what the user typed), so those orphaned
+questions remain in the context window and the model may answer several
+of them at once on the next successful turn. Correct, if slightly
+verbose; not worth adding state to suppress.
+
+Migration note: the standing `rides` GiST-index drift issue (§28)
+recurred for a **fourth** time, on a migration touching only new
+`support_*` tables. Stripped the two spurious `DROP INDEX` statements
+before applying, per the existing process rule, and confirmed directly in
+Postgres that both spatial indexes survived.
+
 ------------------------------------------------------------------------
 
 # 18. Phase 14 --- Security + Rate Limiting
@@ -2525,7 +2629,7 @@ Claude must maintain this checklist.
 [x] Phase 11 — Cancellation + Settlement
 [x] Phase 12 — Notifications
 [x] Phase 13 — Chat
-[ ] Phase 13.5 — AI Support Chatbot
+[x] Phase 13.5 — AI Support Chatbot
 [ ] Phase 14 — Security
 [ ] Phase 15 — Testing + Hardening
 [ ] Phase 16 — Production Deployment Preparation

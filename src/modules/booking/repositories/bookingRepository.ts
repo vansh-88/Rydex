@@ -75,14 +75,34 @@ function toBookingRecord(row: {
 // No Unsupported/geography columns here (unlike rideRepository) — booking
 // has no spatial-query requirement in this phase, so plain Prisma Client
 // calls work throughout, including inside the seat-reservation transaction.
-export async function create(db: Prisma.TransactionClient, input: CreateBookingInput): Promise<BookingRecord> {
+export async function create(
+  db: Prisma.TransactionClient,
+  input: CreateBookingInput,
+): Promise<BookingRecord> {
   const booking = await db.booking.create({ data: input });
   return toBookingRecord(booking);
 }
 
-export async function findById(id: string, db: Prisma.TransactionClient = prisma): Promise<BookingRecord | null> {
+export async function findById(
+  id: string,
+  db: Prisma.TransactionClient = prisma,
+): Promise<BookingRecord | null> {
   const booking = await db.booking.findUnique({ where: { id } });
   return booking ? toBookingRecord(booking) : null;
+}
+
+// claude.md §96.5: backs the support-chatbot tool getMyRecentBookings —
+// scoped to a single passengerId, no cross-user query surface.
+export async function findRecentByPassengerId(
+  passengerId: string,
+  limit: number,
+): Promise<BookingRecord[]> {
+  const bookings = await prisma.booking.findMany({
+    where: { passengerId },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+  });
+  return bookings.map(toBookingRecord);
 }
 
 export async function setPrepaymentOrderId(
@@ -116,16 +136,26 @@ const FINAL_PAYABLE_FROM: BookingStatus[] = ['CONFIRMED'];
 // rather than trust this snapshot, since a concurrently-committing tx (e.g.
 // the passenger cancelling at the same moment) could move a booking out of
 // this set between this read and that call.
-export async function findActiveByRideId(db: Prisma.TransactionClient, rideId: string): Promise<BookingRecord[]> {
-  const bookings = await db.booking.findMany({ where: { rideId, status: { in: ACTIVE_FOR_RIDE_CANCELLATION } } });
+export async function findActiveByRideId(
+  db: Prisma.TransactionClient,
+  rideId: string,
+): Promise<BookingRecord[]> {
+  const bookings = await db.booking.findMany({
+    where: { rideId, status: { in: ACTIVE_FOR_RIDE_CANCELLATION } },
+  });
   return bookings.map(toBookingRecord);
 }
 
 // claude.md §41 (Phase 11): standalone read — finalPaymentService calls this
 // once, right after rideRepository.complete() succeeds, to find who owes the
 // remaining 90%.
-export async function findConfirmedByRideId(rideId: string, db: Prisma.TransactionClient = prisma): Promise<BookingRecord[]> {
-  const bookings = await db.booking.findMany({ where: { rideId, status: { in: FINAL_PAYABLE_FROM } } });
+export async function findConfirmedByRideId(
+  rideId: string,
+  db: Prisma.TransactionClient = prisma,
+): Promise<BookingRecord[]> {
+  const bookings = await db.booking.findMany({
+    where: { rideId, status: { in: FINAL_PAYABLE_FROM } },
+  });
   return bookings.map(toBookingRecord);
 }
 

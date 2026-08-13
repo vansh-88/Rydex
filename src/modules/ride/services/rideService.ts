@@ -74,7 +74,11 @@ export async function createRide(
   driverId: string,
   input: CreateRideInput,
 ): Promise<{ ride: RideDto; paymentOrder: PaymentOrderDto }> {
-  const vehicle = await assertVehicleEligibleForRide(driverId, input.vehicleId, input.availableSeats);
+  const vehicle = await assertVehicleEligibleForRide(
+    driverId,
+    input.vehicleId,
+    input.availableSeats,
+  );
 
   const driver = await userRepository.findById(driverId);
   if (!driver) {
@@ -89,7 +93,10 @@ export async function createRide(
     driverRatingAverage: driver.ratingAverage === null ? null : driver.ratingAverage.toNumber(),
   });
 
-  const postingCommissionAmount = calculatePostingCommission(fare.farePerSeat, input.availableSeats);
+  const postingCommissionAmount = calculatePostingCommission(
+    fare.farePerSeat,
+    input.availableSeats,
+  );
 
   const order = await paymentProvider.createOrder({
     amount: postingCommissionAmount,
@@ -138,7 +145,11 @@ export async function createRide(
 
   return {
     ride: toRideDto(ride),
-    paymentOrder: { providerOrderId: order.providerOrderId, amount: order.amount, currency: order.currency },
+    paymentOrder: {
+      providerOrderId: order.providerOrderId,
+      amount: order.amount,
+      currency: order.currency,
+    },
   };
 }
 
@@ -148,6 +159,38 @@ export async function getRide(rideId: string): Promise<RideDto> {
     throw new AppError(404, 'RIDE_NOT_FOUND', 'Ride not found');
   }
   return toRideDto(ride);
+}
+
+export interface RideSummaryDto {
+  id: string;
+  originAddress: string | null;
+  destinationAddress: string | null;
+  departureTime: string;
+  availableSeats: number;
+  totalSeats: number;
+  farePerSeat: number;
+  status: string;
+}
+
+const RECENT_RIDES_LIMIT = 10;
+
+// claude.md §96.5: backs the support-chatbot tool getMyRecentRidesAsDriver —
+// scoped to the authenticated driverId only. Returns a lighter summary than
+// RideDto (no origin/destination coordinates) since rideRepository.
+// findRecentByDriverId deliberately avoids the raw-SQL geography read for a
+// list this size doesn't need (see that function's comment).
+export async function getMyRecentRidesAsDriver(driverId: string): Promise<RideSummaryDto[]> {
+  const rows = await rideRepository.findRecentByDriverId(driverId, RECENT_RIDES_LIMIT);
+  return rows.map((row) => ({
+    id: row.id,
+    originAddress: row.originAddress,
+    destinationAddress: row.destinationAddress,
+    departureTime: row.departureTime.toISOString(),
+    availableSeats: row.availableSeats,
+    totalSeats: row.totalSeats,
+    farePerSeat: row.farePerSeat.toNumber(),
+    status: row.status,
+  }));
 }
 
 async function getOwnedRideOrThrow(driverId: string, rideId: string): Promise<RideRecord> {
@@ -171,72 +214,82 @@ async function getOwnedRideOrThrow(driverId: string, rideId: string): Promise<Ri
 export async function cancelRide(driverId: string, rideId: string): Promise<RideDto> {
   const ride = await getOwnedRideOrThrow(driverId, rideId);
 
-  const refundPolicy = calculateDriverCancellationRefund(ride.postingCommissionAmount, ride.departureTime);
+  const refundPolicy = calculateDriverCancellationRefund(
+    ride.postingCommissionAmount,
+    ride.departureTime,
+  );
 
-  const { refundTransactionIds, expiredBookingIds, cancelledPassengerIds } = await prisma.$transaction(async (tx) => {
-    const applied = await rideRepository.cancel(tx, rideId);
-    if (!applied) {
-      throw new AppError(409, 'INVALID_RIDE_STATE', 'Ride cannot be cancelled from its current state');
-    }
-
-    const refundTransactionIds: string[] = [];
-    const expiredBookingIds: string[] = [];
-    const cancelledPassengerIds: string[] = [];
-
-    const activeBookings = await bookingRepository.findActiveByRideId(tx, rideId);
-    for (const booking of activeBookings) {
-      // Gate everything off cancel()'s own return value, not the snapshot
-      // above — a booking could have left the active set via a
-      // concurrently-committed tx (e.g. the passenger self-cancelling at
-      // the same moment) between the find and this call.
-      const cancelled = await bookingRepository.cancel(tx, booking.id);
-      if (!cancelled) {
-        continue;
+  const { refundTransactionIds, expiredBookingIds, cancelledPassengerIds } =
+    await prisma.$transaction(async (tx) => {
+      const applied = await rideRepository.cancel(tx, rideId);
+      if (!applied) {
+        throw new AppError(
+          409,
+          'INVALID_RIDE_STATE',
+          'Ride cannot be cancelled from its current state',
+        );
       }
 
-      await rideRepository.releaseSeats(tx, rideId, booking.seatCount);
-      cancelledPassengerIds.push(booking.passengerId);
+      const refundTransactionIds: string[] = [];
+      const expiredBookingIds: string[] = [];
+      const cancelledPassengerIds: string[] = [];
 
-      if (booking.status === 'CONFIRMED') {
-        const refundTx = await transactionRepository.create(tx, {
-          userId: booking.passengerId,
-          bookingId: booking.id,
-          rideId,
-          type: 'REFUND',
-          amount: booking.prepaidAmount,
-          provider: paymentProviderName,
-          providerReference: null,
-        });
-        refundTransactionIds.push(refundTx.id);
-      } else {
-        // Was PENDING_PAYMENT — its scheduled TTL expiry job is now pointless.
-        expiredBookingIds.push(booking.id);
+      const activeBookings = await bookingRepository.findActiveByRideId(tx, rideId);
+      for (const booking of activeBookings) {
+        // Gate everything off cancel()'s own return value, not the snapshot
+        // above — a booking could have left the active set via a
+        // concurrently-committed tx (e.g. the passenger self-cancelling at
+        // the same moment) between the find and this call.
+        const cancelled = await bookingRepository.cancel(tx, booking.id);
+        if (!cancelled) {
+          continue;
+        }
+
+        await rideRepository.releaseSeats(tx, rideId, booking.seatCount);
+        cancelledPassengerIds.push(booking.passengerId);
+
+        if (booking.status === 'CONFIRMED') {
+          const refundTx = await transactionRepository.create(tx, {
+            userId: booking.passengerId,
+            bookingId: booking.id,
+            rideId,
+            type: 'REFUND',
+            amount: booking.prepaidAmount,
+            provider: paymentProviderName,
+            providerReference: null,
+          });
+          refundTransactionIds.push(refundTx.id);
+        } else {
+          // Was PENDING_PAYMENT — its scheduled TTL expiry job is now pointless.
+          expiredBookingIds.push(booking.id);
+        }
       }
-    }
 
-    if (refundPolicy.refundAmount > 0) {
-      const originalPayment = await paymentRepository.findSuccessfulByRideId(tx, rideId);
-      if (originalPayment) {
-        const refundTx = await transactionRepository.create(tx, {
-          userId: driverId,
-          bookingId: null,
-          rideId,
-          type: 'REFUND',
-          amount: refundPolicy.refundAmount,
-          provider: paymentProviderName,
-          providerReference: null,
-        });
-        refundTransactionIds.push(refundTx.id);
+      if (refundPolicy.refundAmount > 0) {
+        const originalPayment = await paymentRepository.findSuccessfulByRideId(tx, rideId);
+        if (originalPayment) {
+          const refundTx = await transactionRepository.create(tx, {
+            userId: driverId,
+            bookingId: null,
+            rideId,
+            type: 'REFUND',
+            amount: refundPolicy.refundAmount,
+            provider: paymentProviderName,
+            providerReference: null,
+          });
+          refundTransactionIds.push(refundTx.id);
+        }
       }
-    }
 
-    return { refundTransactionIds, expiredBookingIds, cancelledPassengerIds };
-  });
+      return { refundTransactionIds, expiredBookingIds, cancelledPassengerIds };
+    });
 
   await Promise.all([
     ...refundTransactionIds.map((id) => scheduleRefund(id)),
     ...expiredBookingIds.map((id) => cancelScheduledBookingExpiry(id)),
-    ...cancelledPassengerIds.map((passengerId) => notificationService.notifyRideCancelled(passengerId, rideId)),
+    ...cancelledPassengerIds.map((passengerId) =>
+      notificationService.notifyRideCancelled(passengerId, rideId),
+    ),
   ]);
 
   return getRide(rideId);
@@ -252,7 +305,9 @@ export async function startRide(driverId: string, rideId: string): Promise<RideD
 
   const confirmedBookings = await bookingRepository.findConfirmedByRideId(rideId);
   await Promise.all(
-    confirmedBookings.map((booking) => notificationService.notifyRideStarting(booking.passengerId, rideId)),
+    confirmedBookings.map((booking) =>
+      notificationService.notifyRideStarting(booking.passengerId, rideId),
+    ),
   );
 
   return getRide(rideId);
@@ -263,12 +318,18 @@ export async function completeRide(driverId: string, rideId: string): Promise<Ri
 
   const applied = await rideRepository.complete(rideId);
   if (!applied) {
-    throw new AppError(409, 'INVALID_RIDE_STATE', 'Ride cannot be completed from its current state');
+    throw new AppError(
+      409,
+      'INVALID_RIDE_STATE',
+      'Ride cannot be completed from its current state',
+    );
   }
 
   const confirmedBookings = await bookingRepository.findConfirmedByRideId(rideId);
   await Promise.all(
-    confirmedBookings.map((booking) => notificationService.notifyRideCompleted(booking.passengerId, rideId)),
+    confirmedBookings.map((booking) =>
+      notificationService.notifyRideCompleted(booking.passengerId, rideId),
+    ),
   );
 
   // claude.md §41 (Phase 11): collect the remaining 90% from every CONFIRMED

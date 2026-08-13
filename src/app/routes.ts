@@ -7,6 +7,7 @@ import { chatRouter } from '../modules/chat/routes.js';
 import { notificationRouter } from '../modules/notification/routes.js';
 import { webhookRouter } from '../modules/payment/routes.js';
 import { rideRouter } from '../modules/ride/routes.js';
+import { supportRouter } from '../modules/support/routes.js';
 import { userRouter } from '../modules/user/routes.js';
 import { vehicleRouter } from '../modules/vehicle/routes.js';
 import { healthRouter } from './routes/health.routes.js';
@@ -22,4 +23,5 @@ export function registerRoutes(app: Express): void {
   app.use('/api/v1/conversations', chatRouter);
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/webhooks', webhookRouter);
+  app.use('/api/v1/support', supportRouter);
 }

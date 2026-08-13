@@ -137,7 +137,11 @@ export async function createBooking(
 
   return {
     booking: toBookingDto({ ...booking, prepaymentOrderId: order.providerOrderId }),
-    paymentOrder: { providerOrderId: order.providerOrderId, amount: order.amount, currency: order.currency },
+    paymentOrder: {
+      providerOrderId: order.providerOrderId,
+      amount: order.amount,
+      currency: order.currency,
+    },
   };
 }
 
@@ -159,6 +163,19 @@ export async function getBooking(userId: string, bookingId: string): Promise<Boo
   return toBookingDto(booking);
 }
 
+const RECENT_BOOKINGS_LIMIT = 10;
+
+// claude.md §96.5: backs the support-chatbot tool getMyRecentBookings —
+// scoped to the authenticated passengerId only (never a parameter the
+// model/caller can widen), same ownership reasoning as getBooking above.
+export async function getMyRecentBookings(passengerId: string): Promise<BookingDto[]> {
+  const bookings = await bookingRepository.findRecentByPassengerId(
+    passengerId,
+    RECENT_BOOKINGS_LIMIT,
+  );
+  return bookings.map(toBookingDto);
+}
+
 // claude.md §34: only the passenger who made the booking may cancel it —
 // this is not the driver's ride-cancellation flow (rideService.cancelRide,
 // Phase 7), which cascades differently and is a Phase 11 concern for bookings.
@@ -176,7 +193,11 @@ export async function cancelBooking(passengerId: string, bookingId: string): Pro
     // concurrently-starting ride.
     const rideStatus = await rideRepository.findStatusById(tx, booking.rideId);
     if (rideStatus === 'STARTED' || rideStatus === 'COMPLETED') {
-      throw new AppError(409, 'BOOKING_NOT_CANCELLABLE', 'Booking cannot be cancelled once the ride has started');
+      throw new AppError(
+        409,
+        'BOOKING_NOT_CANCELLABLE',
+        'Booking cannot be cancelled once the ride has started',
+      );
     }
 
     const applied = await bookingRepository.cancel(tx, bookingId);
@@ -187,7 +208,11 @@ export async function cancelBooking(passengerId: string, bookingId: string): Pro
   });
 
   if (!cancelled) {
-    throw new AppError(409, 'BOOKING_ALREADY_CANCELLED', 'Booking cannot be cancelled from its current state');
+    throw new AppError(
+      409,
+      'BOOKING_ALREADY_CANCELLED',
+      'Booking cannot be cancelled from its current state',
+    );
   }
 
   // §97 (2026-08-13): no longer any reason for the TTL job to fire later.

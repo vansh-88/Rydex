@@ -119,7 +119,10 @@ const RIDE_ROW_SELECT = `
 // `db` defaults to the global `prisma` client but accepts a transaction
 // client too (claude.md §97 2026-08-13) — Phase 10 needs the ride INSERT
 // and its Payment/Transaction rows created atomically together.
-export async function create(input: CreateRideInput, db: Prisma.TransactionClient = prisma): Promise<RideRecord> {
+export async function create(
+  input: CreateRideInput,
+  db: Prisma.TransactionClient = prisma,
+): Promise<RideRecord> {
   const id = randomUUID();
 
   const query = Prisma.sql`
@@ -165,6 +168,43 @@ export async function findById(id: string): Promise<RideRecord | null> {
   return row ? toRideRecord(row) : null;
 }
 
+export interface RideSummaryRow {
+  id: string;
+  originAddress: string | null;
+  destinationAddress: string | null;
+  departureTime: Date;
+  availableSeats: number;
+  totalSeats: number;
+  farePerSeat: Prisma.Decimal;
+  status: RideStatus;
+}
+
+// claude.md §96.5: backs the support-chatbot tool getMyRecentRidesAsDriver.
+// Plain Prisma `select` that excludes origin/destination (the `Unsupported`
+// geography columns, claude.md §77) — no raw SQL needed since this summary
+// has no coordinate/distance requirement, same reasoning findStatusById
+// below already relies on for a Prisma-Client-only read.
+export async function findRecentByDriverId(
+  driverId: string,
+  limit: number,
+): Promise<RideSummaryRow[]> {
+  return prisma.ride.findMany({
+    where: { driverId },
+    select: {
+      id: true,
+      originAddress: true,
+      destinationAddress: true,
+      departureTime: true,
+      availableSeats: true,
+      totalSeats: true,
+      farePerSeat: true,
+      status: true,
+    },
+    orderBy: { departureTime: 'desc' },
+    take: limit,
+  });
+}
+
 const CANCELLABLE_FROM: RideStatus[] = ['PENDING_PAYMENT', 'OPEN', 'FULL'];
 const STARTABLE_FROM: RideStatus[] = ['OPEN', 'FULL'];
 const COMPLETABLE_FROM: RideStatus[] = ['STARTED'];
@@ -191,7 +231,10 @@ export async function cancel(db: Prisma.TransactionClient, id: string): Promise<
 // passenger dodging the final 90% payment by self-cancelling after the ride
 // has already STARTED/COMPLETED. Plain Prisma call — `status` isn't an
 // `Unsupported` geography column, no raw SQL needed.
-export async function findStatusById(db: Prisma.TransactionClient, id: string): Promise<RideStatus | null> {
+export async function findStatusById(
+  db: Prisma.TransactionClient,
+  id: string,
+): Promise<RideStatus | null> {
   const ride = await db.ride.findUnique({ where: { id }, select: { status: true } });
   return ride?.status ?? null;
 }
@@ -248,7 +291,11 @@ export async function reserveSeats(
 // CANCELLED/PENDING_PAYMENT) — safe to call even if the ride moved on, since
 // releasing a seat on a dead ride is a harmless no-op (search already
 // excludes anything but OPEN/FULL, claude.md §22).
-export async function releaseSeats(db: Prisma.TransactionClient, rideId: string, seatCount: number): Promise<void> {
+export async function releaseSeats(
+  db: Prisma.TransactionClient,
+  rideId: string,
+  seatCount: number,
+): Promise<void> {
   await db.$executeRaw(Prisma.sql`
     UPDATE rides
     SET

@@ -2378,11 +2378,20 @@ INVALID_WEBHOOK_PAYLOAD
 REFUND_FAILED
 
 SUPPORT_CONVERSATION_NOT_FOUND
-MESSAGE_TOO_LONG
+SUPPORT_CHAT_RATE_LIMITED
+SUPPORT_CHAT_DAILY_LIMIT_REACHED
 AI_PROVIDER_ERROR
 AI_PROVIDER_TIMEOUT
 AI_PROVIDER_RATE_LIMITED
 ```
+
+Message length limits (§96.5 cost control) surface as the standard
+`VALIDATION_ERROR` from the shared `validateBody` middleware, like every
+other module's input validation — no chatbot-specific code for it.
+`AI_PROVIDER_RATE_LIMITED` is the *provider's* quota rejection (retry
+later); `SUPPORT_CHAT_RATE_LIMITED`/`SUPPORT_CHAT_DAILY_LIMIT_REACHED`
+are Rydex's own per-user limits. The upstream 429 is never forwarded as a
+429 to our client — our own limits are what govern the caller.
 
 Never expose stack traces to clients.
 
@@ -4421,3 +4430,29 @@ Record of intentional decisions made after the initial draft, per §91.
     `README.md`); this module doesn't special-case that either — errors
     flow through the existing `errorHandler` middleware like every
     other module.
+-   **`AIToolCall` gained an opaque `providerState` field, added during
+    implementation for a reason the design didn't anticipate.** Newer
+    Gemini models reject any `functionCall` part replayed on a later
+    turn unless its original `thought_signature` is echoed back with it
+    — which broke every multi-turn conversation that had made a tool
+    call. Rather than leak the vendor's concept into the
+    provider-agnostic interface, `AIToolCall` carries an opaque
+    `providerState` string that `ChatbotService`/`supportRepository`
+    persist (inside the `tool_calls` JSON) and replay verbatim without
+    interpreting. Providers that don't need it never set it. This is the
+    interface absorbing a vendor requirement exactly as intended —
+    contrast `PaymentProvider.verifyWebhookSignature` (§37), which
+    solved the same class of problem by adding a *named* method because
+    the concept (webhook signing) is genuinely universal; per-turn
+    reasoning-continuation state is not.
+-   **Verified against the real Gemini API, and the ownership boundary
+    holds under direct attack**: asked to fetch another user's booking
+    id with the prompt explicitly asserting "it is my booking," the tool
+    layer refused and the assistant reported not-found, leaking nothing.
+    Asked for a driver's phone number and home address, it invented
+    nothing. Three further real bugs were found and fixed in the same
+    pass — a retired default model, Gemini rejecting non-object
+    `functionResponse.response` payloads (our tool results are often
+    JSON arrays), and `AI_PROVIDER_RATE_LIMITED` being specified in §55
+    but never actually mapped from an upstream 429. See steps.md
+    Phase 13.5 "Status: complete" for the full detail.

@@ -2637,8 +2637,8 @@ DRIVER_EARLY_CANCEL_REFUND_PERCENT
 DRIVER_CANCEL_THRESHOLD_HOURS
 
 AI_PROVIDER
-GROK_API_KEY
-GROK_MODEL
+GEMINI_API_KEY
+GEMINI_MODEL
 SUPPORT_CHAT_MAX_MESSAGE_LENGTH
 SUPPORT_CHAT_MAX_HISTORY_MESSAGES
 SUPPORT_CHAT_PROVIDER_TIMEOUT_MS
@@ -3771,7 +3771,7 @@ Use metrics to identify actual bottlenecks before optimizing.
 The `Support` module (§96.5) sits alongside the modules in the row
 above (Auth/User/Vehicle/Ride/Booking/Payment/Notification) — omitted
 from the box diagram above for width, not architecturally separate.
-Its external dependency is an AI Provider (Grok/xAI initially),
+Its external dependency is an AI Provider (Gemini initially),
 alongside Resend/FCM/Cloudinary/Maps/Payment Provider in the External
 APIs group.
 
@@ -3942,27 +3942,36 @@ code, no data model, and no routes.
 ``` text
 AIProvider
    |
-   +-- GrokProvider (initial)
+   +-- GeminiProvider (initial)
    |
-   +-- OpenAIProvider / GeminiProvider / ClaudeProvider (future)
+   +-- OpenAIProvider / GrokProvider / ClaudeProvider (future)
 ```
 
 `ChatbotService` depends only on `AIProvider`. Selected via
 `AI_PROVIDER` env var through `infrastructure/ai/index.ts`, mirroring
 `infrastructure/maps/index.ts` and `infrastructure/payments/index.ts`
 exactly — a factory keyed off config, never a concrete class imported
-by a consumer. `GrokProvider` talks to xAI's OpenAI-compatible REST API
-via `fetch`, no vendor SDK, same approach as `GeoapifyMapProvider`. When
-`GROK_API_KEY` is unset, the factory falls back to a `ConsoleAIProvider`
-(logs the would-be prompt/response instead of calling out), matching
-the configured-vs-console-fallback pattern `infrastructure/resend/
-index.ts` and `infrastructure/fcm/index.ts` already use — local
-development never requires a real key.
+by a consumer. `GeminiProvider` uses Google's official `@google/genai`
+Node SDK rather than raw `fetch` — unlike `GeoapifyMapProvider`'s
+simple request/response calls, the tool-calling protocol (message
+roles, function-call/function-response turns, JSON-schema tool
+definitions) is intricate enough that hand-rolling it risks subtle
+protocol bugs in exactly the code path that enforces the ownership
+boundary (§96.5 Tool/context layer); the vendor SDK is the same
+correctness trade-off `RazorpayProvider` already made for signature
+verification (§37, 2026-08-13). When `GEMINI_API_KEY` is unset, the
+factory falls back to a `ConsoleAIProvider` (logs the would-be prompt/
+response instead of calling out), matching the configured-vs-console-
+fallback pattern `infrastructure/resend/index.ts` and
+`infrastructure/fcm/index.ts` already use — local development never
+requires a real key.
 
-Grok is the initial provider because it is free/low-cost for
-development — this is a convenience choice, not an architectural one.
-The interface must make a future provider swap a pure infrastructure
-change.
+Gemini is the initial provider because a Gemini API key is what's
+available for development right now — this is a convenience choice,
+not an architectural one, same reasoning as the Mapbox→Geoapify swap
+(§97, 2026-08-12). The interface must make a future provider swap a
+pure infrastructure change; Grok remains a valid future target behind
+the same interface, unchanged from the original product requirement.
 
 ### Tool / context layer
 
@@ -4373,18 +4382,25 @@ Record of intentional decisions made after the initial draft, per §91.
 -   **`AIProvider` strategy interface adopted, mirroring `MapProvider`
     (§17) and `PaymentProvider` (§37) exactly** — `ChatbotService`
     depends only on the interface, selected via `AI_PROVIDER` env var
-    through a factory in `infrastructure/ai/index.ts`. Grok/xAI is the
-    initial implementation, chosen for the same reason Geoapify was
-    (§97, 2026-08-12): free/low-cost with no payment method required.
-    This is a convenience choice, not an architectural one — OpenAI,
-    Gemini, and Claude remain valid future targets behind the same
+    through a factory in `infrastructure/ai/index.ts`. The original
+    draft of this section named Grok/xAI as the initial implementation
+    (free/low-cost, no payment method required — the same reasoning as
+    the Geoapify choice, §97 2026-08-12); **corrected before any code
+    was written** to Gemini instead, because a Gemini API key is what's
+    actually available for development, using the official
+    `@google/genai` SDK rather than raw `fetch` (unlike
+    `GeoapifyMapProvider`) given how correctness-sensitive the
+    tool-calling protocol is — the same trade-off `RazorpayProvider`
+    already made for signature verification (§37, 2026-08-13). This
+    remains a convenience choice, not an architectural one — OpenAI,
+    Grok, and Claude remain valid future targets behind the same
     interface with no `ChatbotService` changes.
 -   **Real LLM tool-calling chosen over server-side context injection
     for the user-data context layer**, after considering both:
     tool-calling is what the product requirement's "AIProvider → Tool/
     Context Layer → domain services" diagram literally describes, and
-    Grok's API is OpenAI-compatible so tool-calling is native rather
-    than bolted on. The authorization boundary is enforced entirely in
+    Gemini's API supports native function/tool calling so this isn't
+    bolted on. The authorization boundary is enforced entirely in
     backend code, not by prompting: tool JSON-schemas exposed to the
     model never include a `userId`/identity parameter, only
     resource-scoped ids (`bookingId`/`rideId`); the executor always

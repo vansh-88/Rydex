@@ -2134,7 +2134,8 @@ src/modules/support/
 
 src/infrastructure/ai/
     aiProvider.ts
-    grokAiProvider.ts
+    geminiAiProvider.ts
+    consoleAiProvider.ts
     index.ts
 ```
 
@@ -2157,17 +2158,28 @@ before applying.
 ``` text
 AIProvider
    |
-   +-- GrokProvider (initial, xAI, OpenAI-compatible REST via fetch)
+   +-- GeminiProvider (initial, official @google/genai SDK)
 ```
 
 Selected via `AI_PROVIDER` env var, wired through
 `infrastructure/ai/index.ts` exactly like `infrastructure/maps/
 index.ts` and `infrastructure/payments/index.ts`. `ChatbotService`
-imports only the interface-typed singleton, never `GrokProvider`
-directly. When `GROK_API_KEY` is unset, fall back to a
-`ConsoleAIProvider` (logs instead of calling out), same
-configured-vs-console pattern as `infrastructure/resend/index.ts` and
-`infrastructure/fcm/index.ts` — no real key required for local dev.
+imports only the interface-typed singleton, never `GeminiProvider`
+directly. Uses the official SDK rather than raw `fetch` — the
+tool-calling protocol is intricate enough (function-call/
+function-response turns, JSON-schema tool definitions) that the vendor
+SDK is worth the dependency, same trade-off `RazorpayProvider` made for
+signature verification (steps.md §14 / claude.md §37). When
+`GEMINI_API_KEY` is unset, fall back to a `ConsoleAIProvider` (logs
+instead of calling out), same configured-vs-console pattern as
+`infrastructure/resend/index.ts` and `infrastructure/fcm/index.ts` —
+no real key required for local dev.
+
+Originally speced with Grok/xAI as the initial provider (see
+`claude.md` §97, corrected before implementation) — a Gemini API key is
+what's actually available, so `GeminiProvider` ships first. `AIProvider`
+makes this a pure infrastructure swap; nothing else in this phase's
+plan changes.
 
 ## Tool / context layer
 

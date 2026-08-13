@@ -72,10 +72,12 @@ const envSchema = z.object({
   DRIVER_COMMISSION_PERCENT: z.coerce.number().positive().default(5),
   // Consumed starting Phase 9 (bookingService, claude.md §34).
   PASSENGER_PREPAYMENT_PERCENT: z.coerce.number().positive().default(10),
-  FINAL_PAYMENT_PERCENT: z.coerce.number().optional(),
-  PLATFORM_COMMISSION_PERCENT: z.coerce.number().optional(),
-  DRIVER_EARLY_CANCEL_REFUND_PERCENT: z.coerce.number().optional(),
-  DRIVER_CANCEL_THRESHOLD_HOURS: z.coerce.number().optional(),
+  // Consumed starting Phase 11 (settlementService/cancellationPolicyService,
+  // claude.md §31/§41/§85).
+  FINAL_PAYMENT_PERCENT: z.coerce.number().positive().default(90),
+  PLATFORM_COMMISSION_PERCENT: z.coerce.number().positive().default(3),
+  DRIVER_EARLY_CANCEL_REFUND_PERCENT: z.coerce.number().positive().default(2),
+  DRIVER_CANCEL_THRESHOLD_HOURS: z.coerce.number().positive().default(18),
 
   // Consumed starting Phase 9 (booking seat-hold expiry, claude.md §35/§36).
   // How long a PENDING_PAYMENT booking holds its seat before the BullMQ

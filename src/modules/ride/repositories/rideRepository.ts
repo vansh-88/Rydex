@@ -173,12 +173,27 @@ const COMPLETABLE_FROM: RideStatus[] = ['STARTED'];
 // concurrency-safe pattern as vehicleRepository.verifyVehicle/rejectVehicle
 // (claude.md §58): the row only transitions if it's still in an allowed
 // source state, so two concurrent transition attempts can't both apply.
-export async function cancel(id: string): Promise<boolean> {
-  const result = await prisma.ride.updateMany({
+//
+// `db` is a required `Prisma.TransactionClient` (claude.md §97 2026-08-13
+// precedent for the same tradeoff on `create`) — Phase 11's driver
+// cancellation cascade (rideService.cancelRide) needs the ride transition
+// and its bookings' cascade to commit atomically, and this is its only call
+// site, so there's no reason to also support the standalone-`prisma` case.
+export async function cancel(db: Prisma.TransactionClient, id: string): Promise<boolean> {
+  const result = await db.ride.updateMany({
     where: { id, status: { in: CANCELLABLE_FROM } },
     data: { status: 'CANCELLED' },
   });
   return result.count === 1;
+}
+
+// claude.md §59 (Phase 11): bookingService.cancelBooking's guard against a
+// passenger dodging the final 90% payment by self-cancelling after the ride
+// has already STARTED/COMPLETED. Plain Prisma call — `status` isn't an
+// `Unsupported` geography column, no raw SQL needed.
+export async function findStatusById(db: Prisma.TransactionClient, id: string): Promise<RideStatus | null> {
+  const ride = await db.ride.findUnique({ where: { id }, select: { status: true } });
+  return ride?.status ?? null;
 }
 
 export async function start(id: string): Promise<boolean> {

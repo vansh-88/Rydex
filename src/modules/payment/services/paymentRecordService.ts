@@ -44,7 +44,14 @@ export type PaymentOutcome = 'SUCCESS' | 'FAILED';
 export type ResolvePaymentResult =
   | { kind: 'not_found' }
   | { kind: 'already_resolved' }
-  | { kind: 'resolved'; transactionType: TransactionType; rideId: string | null; bookingId: string | null };
+  | {
+      kind: 'resolved';
+      transactionType: TransactionType;
+      rideId: string | null;
+      bookingId: string | null;
+      userId: string;
+      amount: number;
+    };
 
 // claude.md §40: called from inside the webhook's DB transaction. Resolves
 // both the Payment and its associated Transaction together; `not_found` vs
@@ -78,5 +85,12 @@ export async function resolvePaymentByOrderId(
     outcome,
   );
 
-  return { kind: 'resolved', transactionType: transaction.type, rideId: payment.rideId, bookingId: payment.bookingId };
+  return {
+    kind: 'resolved',
+    transactionType: transaction.type,
+    rideId: payment.rideId,
+    bookingId: payment.bookingId,
+    userId: payment.userId,
+    amount: payment.amount,
+  };
 }

@@ -1569,6 +1569,167 @@ Driver = ₹485
 
 The final settlement must use the fare locked to the booking/ride.
 
+## Status: complete
+
+Implemented all three money/state-transition flows in `src/modules/ride/`,
+`src/modules/booking/`, and `src/modules/payment/`.
+
+**Driver cancellation cascade** (`rideService.cancelRide`, rewritten):
+computes the refund policy (`cancellationPolicyService.
+calculateDriverCancellationRefund`, new — the sole place §31's formula is
+computed: `refundAmount = round(postingCommissionAmount *
+(DRIVER_EARLY_CANCEL_REFUND_PERCENT / DRIVER_COMMISSION_PERCENT))`, i.e.
+2/5 of the captured commission when `departureTime - now >=
+DRIVER_CANCEL_THRESHOLD_HOURS`, else 0; `retainedAmount` is the complement
+so the two always sum to exactly the commission, satisfying §84 "refund
+cannot exceed refundable amount" by construction) *before* opening a
+transaction, then in one `prisma.$transaction`: conditionally cancels the
+ride (`rideRepository.cancel`, now `(db, id)` — its only call site, always
+inside this cascade), finds every still-active booking on it
+(`bookingRepository.findActiveByRideId`, new: `PENDING_PAYMENT`|
+`CONFIRMED`), and for each one gates strictly on `bookingRepository.
+cancel(tx, id)`'s own return value (not the find's snapshot) before
+releasing its seat or creating a refund — so a booking a passenger
+self-cancelled microseconds earlier in a separate committed tx is skipped
+entirely, never double-refunded. A booking that *was* `CONFIRMED` gets a
+`PENDING` `REFUND` transaction for its full prepaid amount (§34: driver
+cancellation is the one case the 10% *is* refunded); one that was still
+`PENDING_PAYMENT` gets no refund (nothing was captured) but its scheduled
+BullMQ expiry job is now pointless and is removed after commit. If the
+driver's own commission was actually captured (`paymentRepository.
+findSuccessfulByRideId`) and the policy says `refundAmount > 0`, one more
+`PENDING` `REFUND` transaction is created for the driver. Per §59 ("do not
+call external payment APIs inside the transaction"), the actual
+`PaymentProvider.refund()` calls are deferred to a new BullMQ `refund`
+queue/worker (`src/infrastructure/queue/queues.ts`+`refundWorker.ts`,
+mirroring `booking-expiry` exactly), scheduled after the cascade commits.
+
+**Refund processing** (`src/modules/payment/services/refundService.ts`,
+new): `processRefund` loads the `REFUND` transaction and short-circuits if
+it's not `PENDING` *before* ever calling the provider — closes a
+crash-then-retry window where the process could die after
+`PaymentProvider.refund()` succeeds at the gateway but before the DB
+commit, which would otherwise cause a BullMQ retry to refund the same
+payment twice. Dispatches on whether `bookingId`/`rideId` is set to find
+the original captured `Payment` (`paymentRepository.
+findSuccessfulByBookingId`/`findSuccessfulByRideId`, new) for its
+`providerPaymentId`, calls `PaymentProvider.refund()`, then resolves the
+transaction `PENDING -> SUCCESS` (`transactionRepository.resolveById`,
+new — same conditional-update idempotency pattern as everywhere else in
+this codebase) with the real/stub refund id. `RazorpayProvider.refund()`
+and `StubPaymentProvider.refund()` (both previously threw, per Phase 10's
+notes) are now implemented for real — Razorpay via `client.payments.
+refund(paymentId, { amount })`, Stub via a locally-generated reference id,
+same real-vs-fallback split as every other provider in this codebase.
+
+**Passenger cancellation**: already correct by omission (no refund code
+existed anywhere, so the 10% was already effectively "retained," §34) —
+this phase adds one guard: `bookingService.cancelBooking` now checks
+(inside its existing transaction, to avoid a TOCTOU gap against a
+concurrently-starting ride) whether the ride has reached `STARTED`/
+`COMPLETED` via a new `rideRepository.findStatusById`, and rejects with a
+new `409 BOOKING_NOT_CANCELLABLE` if so. Without this, a passenger could
+self-cancel a `CONFIRMED` booking after the ride starts and dodge the
+final-payment collection this same phase adds — closing that gap was
+judged in-scope here rather than deferred, since it's a direct financial-
+invariant hole created by this phase's own final-payment work.
+
+**Final payment + settlement**: `rideService.completeRide` now calls
+`finalPaymentService.createFinalPaymentOrdersForRide(rideId)` (new,
+`src/modules/booking/services/`) after `rideRepository.complete()`
+succeeds — synchronous with the same request, mirroring how ride/booking
+creation already auto-create their payment orders as part of the same
+request rather than requiring a separate passenger-initiated endpoint.
+For every `CONFIRMED` booking on the ride, computes the remaining amount
+(`settlementService.calculateRemainingFare`, new: `round(totalFare -
+prepaidAmount)`, using the fare *locked* on the booking, never
+recalculated) and creates a `FINAL_PAYMENT` order via the existing
+external-call-then-follow-up-tx pattern (`booking.finalPaymentOrderId`,
+new nullable column, migration `20260812171513_settlement_and_refunds`).
+Guards against re-creating an order if one already exists (idempotent
+against a manual re-invocation after a partial failure, since
+`completeRide` itself can't be retried once the ride is `COMPLETED`) and
+wraps each booking in try/catch (`Promise.allSettled`) so one failure
+doesn't block others or block ride completion. `webhookService` gained a
+`FINAL_PAYMENT` branch: on success, `bookingRepository.completeBooking`
+(new, conditional `CONFIRMED -> COMPLETED`) and then
+`settlementService.calculateSettlement` (new: `platformCommission =
+round(totalFare * PLATFORM_COMMISSION_PERCENT/100)`, `driverShare =
+totalFare - platformCommission` — the one place §84's "application
+commission is calculated exactly once" is computed) is logged in a
+structured, greppable line; there is no wallet/payout table in scope
+(§6) and `TransactionType` is a closed enum, so the split isn't persisted
+as a new row — it's ready for a future payout module to consume. On
+failure, logged for manual follow-up (no seat to release, ride already
+happened).
+
+**Closed a gap Phase 10 explicitly flagged and deferred to this phase**:
+a payment webhook resolving `SUCCESS` *after* the ride/booking it belongs
+to already left `PENDING_PAYMENT` via the cancellation cascade (a genuine
+race — driver cancels at the same moment a delayed webhook resolves) used
+to just `console.error` "needs manual refund review." Both `applied ===
+false` branches in `webhookService` (`DRIVER_RIDE_FEE` and
+`BOOKING_PREPAYMENT`) now instead create a `PENDING` `REFUND` transaction
+in the same tx (reusing the exact same driver-cancellation-policy
+calculation for the commission case) and schedule it after commit — the
+same machinery the cascade itself uses, so whichever of the two
+transactions (cascade vs. webhook) commits second is the one that
+actually creates the refund; verified neither double-refunds nor leaves a
+captured payment with no refund path.
+
+**Real bug found and fixed before any of the above**: the migration this
+phase generated (`prisma migrate dev` diffing the new
+`finalPaymentOrderId` column) also silently emitted `DROP INDEX
+"rides_origin_gist"`/`"rides_destination_gist"` — because `Ride.origin`/
+`destination` are `Unsupported(...)` columns (§16/§77), Prisma's schema-
+diff engine has no record that those hand-written GiST indexes
+(`20260812123854_ride_creation`) are supposed to exist, and reconciled
+them away as "unknown" the moment any other Ride-adjacent migration ran.
+Confirmed via `\di rides_*gist` that both indexes were actually gone from
+the dev DB. Fixed by editing the migration file to drop the `DROP INDEX`
+statements and re-add the original `CREATE INDEX ... USING GIST` ones
+verbatim, and re-running them directly against the already-migrated dev
+DB. `EXPLAIN ANALYZE` re-confirmed `BitmapAnd` over both GiST indexes plus
+the `departure_time`/`status` btree index, matching Phase 8's original
+verification. This is a standing risk for any *future* migration too —
+worth remembering that any schema change touching `rides` needs its
+generated SQL diffed against expectations before applying, not just
+trusted, as long as `origin`/`destination` stay `Unsupported`.
+
+Verified end-to-end against the real Postgres/Redis/BullMQ stack (no
+automated test infra yet, per the Phase 3 note; `PAYMENT_PROVIDER_KEY`/
+`SECRET` and `RESEND_API_KEY` temporarily blanked so `StubPaymentProvider`
+handled `refund()` deterministically without needing a real
+browser-driven Razorpay checkout to produce a genuine captured payment to
+refund against, and OTPs logged to console — both restored afterward)
+with a scripted end-to-end run covering: early (>=18h) driver cancellation
+— 2/5 driver refund + full passenger refund, both resolved `SUCCESS` by
+the worker with a real stub refund id; late (<18h) driver cancellation —
+passenger refund only, no driver refund transaction at all; cascade over
+a still-unpaid (`PENDING_PAYMENT`) booking — cancelled, seat released, no
+refund transaction (nothing was ever captured); the mandatory concurrency
+test — two passengers racing for a ride's last seat, exactly one `201`
+and one `409`, seats never negative; full final-payment lifecycle —
+`FINAL_PAYMENT` order/Payment/Transaction created for exactly the locked
+remaining 90%, webhook confirmation flips booking to `COMPLETED`, and the
+settlement log line appears with the correct 97/3 split; passenger
+self-cancel blocked with `409 BOOKING_NOT_CANCELLABLE` once the ride has
+`STARTED`, while the identical cancel *before* start still succeeds and
+correctly creates no refund transaction (10% retained); and both webhook-
+race scenarios from Phase 10's flagged gap — a driver posting-fee payment
+and a booking prepayment each resolving `SUCCESS` after their ride/
+booking was already cancelled — correctly created and resolved a refund
+transaction rather than silently leaving captured money with no refund
+path. `npm run typecheck`, `npm run lint`, and `npm run build` all pass.
+
+Not built in this phase, intentionally out of scope: any real driver
+payout/settlement disbursement (§6 — no wallet/payout system exists;
+`calculateSettlement`'s result is logged, not paid out anywhere), refund-
+webhook handling for Razorpay's own async `refund.processed` event (this
+phase's refunds are resolved synchronously from `PaymentProvider.
+refund()`'s own response, not a webhook), and notification enqueueing for
+any of the new events (`RefundProcessed`, etc. — Phase 12).
+
 ------------------------------------------------------------------------
 
 # 16. Phase 12 --- Notification System
@@ -1645,6 +1806,148 @@ idempotent jobs
 invalid token cleanup
 structured logging
 ```
+
+## Status: complete
+
+Implemented the full notification module (`src/modules/notification/`),
+an FCM `PushProvider` abstraction (`src/infrastructure/fcm/`), and a new
+`notification` BullMQ queue/worker — new migration
+`20260812182449_notifications` (`UserDevice`, `Notification`,
+`DevicePlatform`, `NotificationType`).
+
+`PushProvider` (claude.md §17/§37-style strategy interface): `send(tokens,
+payload): Promise<PushSendResult[]>`, resolving per-token success/
+invalid-token outcomes rather than throwing per token (real FCM behavior —
+stale tokens are routine), only throwing for a genuine gateway-level
+failure. `FirebasePushProvider` uses the real `firebase-admin` SDK
+(`sendEachForMulticast`, deliberately using the deprecated `tokens` field
+over the newer FID-based API since our domain model is registration
+tokens, matching claude.md §45's `user_devices.device_token`).
+`ConsolePushProvider` is the local-dev fallback (logs instead of sending,
+always reports success), selected the same way Resend/Razorpay's
+factories already do (`infrastructure/fcm/index.ts`).
+
+**Real bug found and fixed during manual verification**: unlike Resend/
+Razorpay's constructors (which just store the key and fail lazily on
+first real call), firebase-admin's `cert()` synchronously parses the
+private key and throws immediately on anything that isn't valid PEM —
+confirmed by actually crashing the entire process at import time with
+this environment's `.env` `FCM_PRIVATE_KEY` (not a real PEM key). A
+misconfigured push credential must degrade push delivery, not take down
+auth/rides/payments/everything else, so `createPushProvider()` now wraps
+`FirebasePushProvider` construction in try/catch and falls back to
+`ConsolePushProvider` on failure, logging the error — same graceful-
+degradation contract as the "not configured" case. Re-verified after the
+fix: server boots cleanly and serves traffic normally with the invalid
+key still in `.env`.
+
+**Notification delivery pipeline** (`notificationService.ts`): every
+`notify*` function (one per `NotificationType`, each owning its own
+title/body copy rather than a shared template registry with a single
+call site apiece, claude.md §86) enqueues a `deliver-notification` BullMQ
+job with a deterministic `id` generated at enqueue time. The worker
+(`processNotificationJob`) does two independent steps, per claude.md §46
+("FCM delivery and notification persistence are separate concerns"): (1)
+`notificationRepository.upsert` — idempotent by that same `id`, so a
+BullMQ retry's persistence step is a no-op rather than a duplicate row;
+(2) fetch the user's device tokens and call `pushProvider.send()`,
+left to throw on a genuine gateway failure so BullMQ's retry/backoff
+(`attempts: 5`, exponential) retries the *whole* job — safe because step
+(1) is already idempotent. Tokens FCM reports invalid are removed
+(`userDeviceRepository.removeTokens`, claude.md §45 — deletion, since
+`user_devices` has no status field in the given schema).
+
+**Event wiring** — one `notify*` call added at each transition, into
+existing Phase 7-11 code:
+- `bookingService.createBooking` → `RIDE_BOOKED` (driver)
+- webhook `BOOKING_PREPAYMENT`/`FINAL_PAYMENT` success → `BOOKING_CONFIRMED` /
+  implicit via `RIDE_COMPLETED` already covering the ride side
+- `bookingService.cancelBooking` (self-cancel) and
+  `bookingExpiryService.processBookingExpiry` (TTL expiry) → `BOOKING_CANCELLED`
+- `rideService.cancelRide` cascade → `RIDE_CANCELLED` per affected passenger
+- `rideService.startRide` / `completeRide` → `RIDE_STARTING` / `RIDE_COMPLETED`
+  per `CONFIRMED` booking's passenger (reusing Phase 11's
+  `bookingRepository.findConfirmedByRideId`)
+- `webhookService` (every resolved payment, all three transaction types) →
+  `PAYMENT_SUCCESS`/`PAYMENT_FAILED` for the paying user — `paymentRecordService.
+  resolvePaymentByOrderId`'s `ResolvePaymentResult` gained `userId`/`amount`
+  fields (already in scope from the `payment` row it reads) so the webhook
+  doesn't need an extra lookup
+- `refundService.processRefund` (after a refund actually resolves to
+  `SUCCESS`) → `REFUND_PROCESSED`
+
+New endpoints: `POST /api/v1/users/me/devices` (register/upsert a device
+token — routed on `userRouter`, delegating to the notification module's
+`deviceController`, same cross-module routing pattern as booking-on-ride),
+`GET /api/v1/notifications` (cursor-paginated, newest-first — a simpler
+single-fixed-order cursor than ride search's, `notificationCursor.ts`),
+`PATCH /api/v1/notifications/:id/read` (idempotent — re-marking an
+already-read notification returns the existing `readAt` rather than
+erroring; scoped to the caller's own notifications, 404 on anyone else's
+or nonexistent).
+
+**Second, unrelated bug found before any of the above (fixed first,
+blocking)**: the very first `prisma migrate dev` run for this phase's
+schema change failed the shadow-database replay with `relation
+"rides_origin_gist" already exists` — root cause was Phase 11's own fix to
+this exact problem (`20260812171513_settlement_and_refunds`, claude.md
+§97 2026-08-14) had re-added a plain `CREATE INDEX` for the two hand-
+written `rides` GiST indexes, which collides on a *fresh* database replay
+since the original migration (`20260812123854_ride_creation`) already
+creates them earlier in the same replay — Phase 11's fix only worked
+against the one already-migrated dev DB it was written against, not
+against a from-scratch environment. Fixed by making that CREATE INDEX
+`IF NOT EXISTS`. Then, once migrate dev proceeded, Prisma's diff
+generated the *same class* of erroneous `DROP INDEX` for both indexes
+*again* in this phase's own new migration — confirming this isn't a
+one-off, it's structural for as long as `rides.origin`/`destination` stay
+`Unsupported` (invisible to Prisma's schema diff). Stripped from this
+migration's SQL the same way. Both fixes applied without a destructive
+`prisma migrate reset` — the already-applied migrations' stored
+checksums were updated directly (`UPDATE _prisma_migrations SET
+checksum = ...`, computed via `shasum -a 256` of the corrected file) to
+match the corrected SQL, preserving all existing dev data. Added a
+standing process rule (steps.md §28) so this doesn't need rediscovering
+in Phase 13+: always `prisma migrate dev --create-only`, inspect for
+these two `DROP INDEX` statements, strip them before applying.
+
+Verified end-to-end against the real Postgres/Redis/BullMQ stack (no
+automated test infra yet, per the Phase 3 note) with two passes:
+`RESEND_API_KEY`/`PAYMENT_PROVIDER_KEY`/`FCM_*` all blanked (deterministic
+console-fallback run — 24 scripted assertions, all passing): device
+registration and re-registration upserting the same token rather than
+duplicating; all nine notification types fired with correct recipient
+and content (`RIDE_BOOKED` to the driver on booking creation;
+`BOOKING_CONFIRMED`+`PAYMENT_SUCCESS` on prepayment webhook;
+`RIDE_STARTING`/`RIDE_COMPLETED` to the confirmed passenger;
+`PAYMENT_SUCCESS` again for the locked final-90%-payment amount;
+`PAYMENT_FAILED` on a failed webhook; `BOOKING_CANCELLED` on passenger
+self-cancel; `RIDE_CANCELLED`+`REFUND_PROCESSED` on a driver cascade
+cancellation with a confirmed booking); `GET /notifications` returning
+the expected items; mark-read setting `readAt`, idempotent on a second
+call (same `readAt`, not an error), and 404 for a nonexistent/foreign
+notification id. Second pass with real (but invalid) `FCM_*` credentials
+restored — confirmed the graceful-fallback fix above, then re-ran the
+identical 24-assertion suite against that server instance to confirm the
+full pipeline is unaffected by which push-provider branch is active.
+`npm run typecheck`, `npm run lint`, and `npm run build` all pass.
+
+Flagged to the user, not a code defect: this environment's `.env`
+`FCM_PRIVATE_KEY` is not a valid PEM key (confirmed by the crash this
+phase's graceful-fallback fix now catches) — real push delivery needs a
+genuine Firebase service-account key before it'll actually send anything;
+until then `ConsolePushProvider` handles it transparently.
+
+Not built in this phase, intentionally out of scope: the `PaymentSuccessful`/
+`PaymentFailed`/`RefundProcessed` naming in steps.md's own event list above
+was reconciled against claude.md §44's authoritative `NotificationType`
+enum (`PAYMENT_SUCCESS`/`PAYMENT_FAILED`/`REFUND_PROCESSED`, plus
+`RIDE_BOOKED` which steps.md's list omits but claude.md §44 includes) —
+claude.md is the architectural source of truth per §1, so its 9-value
+enum was implemented as-is. No notification-preferences/opt-out system
+(not specified), no digest/batching (each event is its own immediate
+notification, matching "do not block... waiting for FCM" §42's
+real-time framing).
 
 ------------------------------------------------------------------------
 
@@ -1944,8 +2247,8 @@ Claude must maintain this checklist.
 [x] Phase 8 — Ride Search
 [x] Phase 9 — Booking
 [x] Phase 10 — Payment
-[ ] Phase 11 — Cancellation + Settlement
-[ ] Phase 12 — Notifications
+[x] Phase 11 — Cancellation + Settlement
+[x] Phase 12 — Notifications
 [ ] Phase 13 — Chat
 [ ] Phase 14 — Security
 [ ] Phase 15 — Testing + Hardening
@@ -2094,6 +2397,31 @@ Migrations must be reviewed for:
 -   data migration requirements
 
 Never casually delete production columns/tables.
+
+## Standing rule: `rides` GiST indexes (added 2026-08-14, Phase 12)
+
+`rides.origin`/`destination` are `Unsupported("geography(Point,4326)")` in
+`schema.prisma` (claude.md §16/§77 — Prisma has no native geography type).
+Their hand-written GiST indexes (`rides_origin_gist`,
+`rides_destination_gist`, added by hand in migration
+`20260812123854_ride_creation`) are therefore invisible to Prisma's
+schema-diff engine. **Every** `prisma migrate dev`/`migrate diff` run,
+regardless of what the actual schema change is about, will propose
+`DROP INDEX "rides_origin_gist"`/`"rides_destination_gist"` as part of
+reconciling that "unknown" state — this has now happened twice
+(migrations `20260812171513_settlement_and_refunds` and
+`20260812182449_notifications`), for schema changes with nothing to do
+with `rides`.
+
+Until `origin`/`destination` stop being `Unsupported` (i.e. Prisma gains
+native geography support, or this project moves spatial indexing to
+raw-SQL-managed migrations entirely), every future migration must be
+generated with `prisma migrate dev --create-only`, hand-inspected for
+those two `DROP INDEX` statements, and have them stripped before
+applying. Do not run a plain `prisma migrate dev` on this project without
+this check — it will silently regress ride search's spatial index usage
+(claude.md §16/§20), which has no test coverage that would otherwise catch
+it (no automated test infra yet, per the Phase 3 note).
 
 ------------------------------------------------------------------------
 

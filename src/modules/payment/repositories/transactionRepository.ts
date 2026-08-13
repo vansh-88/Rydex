@@ -8,7 +8,12 @@ export interface CreateTransactionInput {
   type: TransactionType;
   amount: number;
   provider: string;
-  providerReference: string;
+  // Nullable: a REFUND transaction (Phase 11, claude.md §31/§34/§59) is
+  // created with no provider reference yet — the actual refund id only
+  // exists once refundService.processRefund actually calls
+  // PaymentProvider.refund(), after the transaction that created this row
+  // has already committed (§5.5).
+  providerReference: string | null;
 }
 
 export interface TransactionRecord {
@@ -69,4 +74,28 @@ export async function resolveLatestPending(
 
   const updated = await db.transaction.update({ where: { id: pending.id }, data: { status } });
   return toTransactionRecord(updated);
+}
+
+// claude.md §59 (Phase 11): refundService reads a REFUND transaction to find
+// which booking/ride it's against before calling PaymentProvider.refund().
+export async function findById(db: Prisma.TransactionClient, id: string): Promise<TransactionRecord | null> {
+  const transaction = await db.transaction.findUnique({ where: { id } });
+  return transaction ? toTransactionRecord(transaction) : null;
+}
+
+// claude.md §40/§58 pattern reused for refunds: only ever transitions from
+// PENDING, so a duplicate/retried refund job is a harmless no-op once the
+// first attempt already succeeded — refundService checks this status before
+// ever calling PaymentProvider.refund() a second time.
+export async function resolveById(
+  db: Prisma.TransactionClient,
+  id: string,
+  status: Extract<TransactionStatus, 'SUCCESS' | 'FAILED'>,
+  providerReference: string,
+): Promise<boolean> {
+  const result = await db.transaction.updateMany({
+    where: { id, status: 'PENDING' },
+    data: { status, providerReference },
+  });
+  return result.count === 1;
 }

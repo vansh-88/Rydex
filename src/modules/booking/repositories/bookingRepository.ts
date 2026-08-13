@@ -28,6 +28,7 @@ export interface BookingRecord {
   totalFare: number;
   prepaidAmount: number;
   prepaymentOrderId: string | null;
+  finalPaymentOrderId: string | null;
   status: BookingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -46,6 +47,7 @@ function toBookingRecord(row: {
   totalFare: Prisma.Decimal;
   prepaidAmount: Prisma.Decimal;
   prepaymentOrderId: string | null;
+  finalPaymentOrderId: string | null;
   status: BookingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -63,6 +65,7 @@ function toBookingRecord(row: {
     totalFare: row.totalFare.toNumber(),
     prepaidAmount: row.prepaidAmount.toNumber(),
     prepaymentOrderId: row.prepaymentOrderId,
+    finalPaymentOrderId: row.finalPaymentOrderId,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -90,9 +93,41 @@ export async function setPrepaymentOrderId(
   await db.booking.update({ where: { id }, data: { prepaymentOrderId } });
 }
 
+// claude.md §41 (Phase 11): mirrors setPrepaymentOrderId — set right after
+// finalPaymentService creates the remaining-90% payment order.
+export async function setFinalPaymentOrderId(
+  id: string,
+  finalPaymentOrderId: string,
+  db: Prisma.TransactionClient = prisma,
+): Promise<void> {
+  await db.booking.update({ where: { id }, data: { finalPaymentOrderId } });
+}
+
 const CANCELLABLE_FROM: BookingStatus[] = ['PENDING_PAYMENT', 'CONFIRMED'];
 const EXPIRABLE_FROM: BookingStatus[] = ['PENDING_PAYMENT'];
 const PAYABLE_FROM: BookingStatus[] = ['PENDING_PAYMENT'];
+const ACTIVE_FOR_RIDE_CANCELLATION: BookingStatus[] = ['PENDING_PAYMENT', 'CONFIRMED'];
+const FINAL_PAYABLE_FROM: BookingStatus[] = ['CONFIRMED'];
+
+// claude.md §59 (Phase 11): candidates for the driver-cancellation cascade —
+// every booking on the ride that hasn't already reached a terminal state.
+// Read inside the cascade's own transaction; the caller must still gate on
+// each individual bookingRepository.cancel(tx, id) call's own return value
+// rather than trust this snapshot, since a concurrently-committing tx (e.g.
+// the passenger cancelling at the same moment) could move a booking out of
+// this set between this read and that call.
+export async function findActiveByRideId(db: Prisma.TransactionClient, rideId: string): Promise<BookingRecord[]> {
+  const bookings = await db.booking.findMany({ where: { rideId, status: { in: ACTIVE_FOR_RIDE_CANCELLATION } } });
+  return bookings.map(toBookingRecord);
+}
+
+// claude.md §41 (Phase 11): standalone read — finalPaymentService calls this
+// once, right after rideRepository.complete() succeeds, to find who owes the
+// remaining 90%.
+export async function findConfirmedByRideId(rideId: string, db: Prisma.TransactionClient = prisma): Promise<BookingRecord[]> {
+  const bookings = await db.booking.findMany({ where: { rideId, status: { in: FINAL_PAYABLE_FROM } } });
+  return bookings.map(toBookingRecord);
+}
 
 // claude.md §34: a passenger may cancel while PENDING_PAYMENT (before ever
 // paying) or CONFIRMED (after paying, forfeiting the prepaid amount — the
@@ -140,6 +175,17 @@ export async function failPayment(db: Prisma.TransactionClient, id: string): Pro
   const result = await db.booking.updateMany({
     where: { id, status: { in: PAYABLE_FROM } },
     data: { status: 'PAYMENT_FAILED' },
+  });
+  return result.count === 1;
+}
+
+// claude.md §41/§33 (Phase 11): the final-payment webhook's success path —
+// only ever fires from CONFIRMED, mirroring confirmPayment's idempotent
+// conditional-update pattern.
+export async function completeBooking(db: Prisma.TransactionClient, id: string): Promise<boolean> {
+  const result = await db.booking.updateMany({
+    where: { id, status: { in: FINAL_PAYABLE_FROM } },
+    data: { status: 'COMPLETED' },
   });
   return result.count === 1;
 }

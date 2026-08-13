@@ -39,8 +39,14 @@ export class StubPaymentProvider implements PaymentProvider {
     throw new Error('StubPaymentProvider.verifyPayment is not implemented — no real checkout flow exists to call it');
   }
 
-  refund(_input: RefundInput): Promise<RefundResult> {
-    throw new Error('StubPaymentProvider.refund is not implemented — refunds land in Phase 11');
+  // claude.md §31/§34/§59 (Phase 11) — like createOrder(), never talks to a
+  // real gateway; just returns a locally-generated reference so
+  // refundService's flow (Transaction PENDING -> SUCCESS via a real
+  // providerRefundId) is exercisable in local dev without Razorpay
+  // credentials.
+  async refund(input: RefundInput): Promise<RefundResult> {
+    await Promise.resolve();
+    return { providerRefundId: `stub_refund_${randomUUID()}`, amount: input.amount };
   }
 
   // Real HMAC-SHA256 verification against PAYMENT_PROVIDER_WEBHOOK_SECRET —

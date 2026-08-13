@@ -4,6 +4,7 @@ import { paymentProvider, paymentProviderName } from '../../../infrastructure/pa
 import * as paymentRecordService from '../../payment/services/paymentRecordService.js';
 import * as rideRepository from '../../ride/repositories/rideRepository.js';
 import { AppError } from '../../../shared/errors/AppError.js';
+import * as notificationService from '../../notification/services/notificationService.js';
 import * as bookingRepository from '../repositories/bookingRepository.js';
 import type { BookingRecord } from '../repositories/bookingRepository.js';
 import type { CreateBookingInput } from '../schemas/bookingSchemas.js';
@@ -123,6 +124,10 @@ export async function createBooking(
 
   await scheduleBookingExpiry(booking.id, env.BOOKING_PAYMENT_TTL_SECONDS);
 
+  // claude.md §42: fire-and-forget enqueue, never awaited-through to actual
+  // delivery — does not block this response on FCM.
+  await notificationService.notifyRideBooked(ride.driverId, rideId, input.seatCount);
+
   return {
     booking: toBookingDto({ ...booking, prepaymentOrderId: order.providerOrderId }),
     paymentOrder: { providerOrderId: order.providerOrderId, amount: order.amount, currency: order.currency },
@@ -157,6 +162,16 @@ export async function cancelBooking(passengerId: string, bookingId: string): Pro
   }
 
   const cancelled = await prisma.$transaction(async (tx) => {
+    // claude.md §41/§84 (Phase 11): once the ride has STARTED/COMPLETED, a
+    // CONFIRMED booking owes (or will owe) the final 90% payment — cancelling
+    // it here would let the passenger dodge that. Checked inside the
+    // transaction (not before it) to avoid a TOCTOU gap against a
+    // concurrently-starting ride.
+    const rideStatus = await rideRepository.findStatusById(tx, booking.rideId);
+    if (rideStatus === 'STARTED' || rideStatus === 'COMPLETED') {
+      throw new AppError(409, 'BOOKING_NOT_CANCELLABLE', 'Booking cannot be cancelled once the ride has started');
+    }
+
     const applied = await bookingRepository.cancel(tx, bookingId);
     if (applied) {
       await rideRepository.releaseSeats(tx, booking.rideId, booking.seatCount);
@@ -170,6 +185,8 @@ export async function cancelBooking(passengerId: string, bookingId: string): Pro
 
   // §97 (2026-08-13): no longer any reason for the TTL job to fire later.
   await cancelScheduledBookingExpiry(bookingId);
+
+  await notificationService.notifyBookingCancelled(passengerId, bookingId);
 
   return getBooking(passengerId, bookingId);
 }

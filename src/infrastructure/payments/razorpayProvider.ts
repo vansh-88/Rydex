@@ -67,8 +67,21 @@ export class RazorpayProvider implements PaymentProvider {
     return Promise.resolve({ verified: safeEqual(expected, input.signature) });
   }
 
-  refund(_input: RefundInput): Promise<RefundResult> {
-    throw new Error('RazorpayProvider.refund is not implemented yet — refunds land in Phase 11');
+  // claude.md §31/§34/§59 (Phase 11): driver-cancellation refunds (posting
+  // commission + passenger prepayments). `providerPaymentId` is the original
+  // captured payment's id — Razorpay refunds are always issued against a
+  // specific payment, never an order.
+  async refund(input: RefundInput): Promise<RefundResult> {
+    let refund;
+    try {
+      refund = await this.client.payments.refund(input.providerPaymentId, {
+        amount: Math.round(input.amount * SUBUNITS_PER_RUPEE),
+      });
+    } catch {
+      throw new AppError(502, 'PAYMENT_PROVIDER_ERROR', 'Failed to process refund');
+    }
+
+    return { providerRefundId: refund.id, amount: input.amount };
   }
 
   verifyWebhookSignature(rawBody: Buffer, signature: string): boolean {

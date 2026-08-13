@@ -74,3 +74,30 @@ export async function resolve(
   });
   return result.count === 1;
 }
+
+// claude.md §31/§59 (Phase 11): refund processing needs the original
+// captured payment's `providerPaymentId` to refund against — Razorpay (and
+// the interface, §37) refunds a payment, not an order. `bookingId`/`rideId`
+// is unambiguous at refund time: a driver-cancellation refund only ever
+// fires while the ride hasn't reached COMPLETED (§19 CANCELLABLE_FROM), so
+// at most one SUCCESS payment exists per booking (BOOKING_PREPAYMENT) or
+// per ride (DRIVER_RIDE_FEE) at that point — `orderBy` + first-match is just
+// defensive.
+export async function findSuccessfulByBookingId(
+  db: Prisma.TransactionClient,
+  bookingId: string,
+): Promise<PaymentRecord | null> {
+  const payment = await db.payment.findFirst({
+    where: { bookingId, status: 'SUCCESS' },
+    orderBy: { createdAt: 'desc' },
+  });
+  return payment ? toPaymentRecord(payment) : null;
+}
+
+export async function findSuccessfulByRideId(db: Prisma.TransactionClient, rideId: string): Promise<PaymentRecord | null> {
+  const payment = await db.payment.findFirst({
+    where: { rideId, bookingId: null, status: 'SUCCESS' },
+    orderBy: { createdAt: 'desc' },
+  });
+  return payment ? toPaymentRecord(payment) : null;
+}

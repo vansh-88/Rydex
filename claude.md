@@ -4015,3 +4015,107 @@ Record of intentional decisions made after the initial draft, per §91.
     now). Purely an efficiency cleanup — the job was already safely
     idempotent either way (§35/§36) — so this doesn't change behavior,
     only avoids pointless later job execution.
+
+### 2026-08-14
+
+-   **Phase 11 (Cancellation, Refunds, Settlement) implemented.** Driver
+    cancellation now cascades to every active booking on the ride
+    (§31/§34/§59): a `CONFIRMED` booking's 10% prepayment is refunded in
+    full, a still-`PENDING_PAYMENT` one is just cancelled (nothing was
+    captured), and the driver's own 5% posting commission is refunded per
+    the §31/§85 time-based rule (2/5 of the captured commission if
+    cancelling `>= DRIVER_CANCEL_THRESHOLD_HOURS` before departure, else
+    nothing), only when it was actually captured. Refund intents are
+    recorded as `PENDING` `Transaction` rows inside the cancellation
+    transaction and resolved asynchronously by a new BullMQ `refund`
+    queue/worker calling the now-real `PaymentProvider.refund()`
+    (`RazorpayProvider`/`StubPaymentProvider` both previously threw, per
+    the 2026-08-13 entry above). Final payment (§41) is triggered
+    synchronously inside `POST /rides/:id/complete` (no new endpoint) —
+    the remaining 90% (from the fare locked on each `CONFIRMED` booking)
+    gets a `FINAL_PAYMENT` order per booking; the webhook flips the
+    booking to `COMPLETED` on success and computes+logs the 97/3
+    driver/platform settlement split (§84's "calculated exactly once").
+    No new schema exists to persist that split — §6 keeps a wallet/payout
+    system out of scope, and `TransactionType` is a closed enum — so it's
+    a structured log line for a future payout module to consume, not a
+    new row.
+-   **Closed the exact gap the 2026-08-13 entry above flagged and
+    deferred to this phase**: a payment webhook resolving `SUCCESS`
+    after its ride/booking already left `PENDING_PAYMENT` via the
+    cancellation cascade now creates and schedules a refund transaction
+    (reusing the same cancellation-policy calculation for the commission
+    case) instead of only logging "needs manual review." Verified via a
+    forced race (cancel first, deliver the webhook after) that this
+    never double-refunds against the cascade's own refund creation —
+    exactly one of the two paths fires, gated by each side's own
+    conditional state-transition outcome.
+-   **New gap found and closed in the same phase, not previously
+    flagged**: nothing stopped a passenger from self-cancelling a
+    `CONFIRMED` booking after the ride had `STARTED`/`COMPLETED`, which
+    would dodge the final-payment collection this phase adds.
+    `bookingService.cancelBooking` now rejects with `409
+    BOOKING_NOT_CANCELLABLE` once the ride has started, checked inside
+    the existing transaction to avoid a TOCTOU gap.
+-   **Unrelated bug found before any of the above and fixed first**:
+    `prisma migrate dev`'s diff for this phase's own `Booking.
+    finalPaymentOrderId` column also silently emitted `DROP INDEX` for
+    both hand-written `rides` GiST spatial indexes (§16) — because
+    `Ride.origin`/`destination` are `Unsupported(...)` columns (§77),
+    Prisma's schema-diff engine has no record they're supposed to exist
+    and reconciles them away as "unknown" on any unrelated `rides`-
+    adjacent migration. Confirmed both indexes were actually gone from
+    the dev DB; fixed by rewriting the generated migration file to keep
+    them and re-running the `CREATE INDEX` statements directly.
+    `EXPLAIN ANALYZE` re-confirmed both are used again. Flagged as a
+    standing risk for any future migration that touches `rides` while
+    `origin`/`destination` stay `Unsupported` — the generated SQL needs
+    to be diffed against expectations, not just trusted.
+
+### 2026-08-15
+
+-   **Phase 12 (Notification System) implemented.** New `PushProvider`
+    strategy interface (§17/§37-style) behind `src/infrastructure/fcm/`:
+    `FirebasePushProvider` (real `firebase-admin` SDK) and
+    `ConsolePushProvider` (local-dev fallback), selected the same
+    configured-vs-fallback way as every other provider in this codebase.
+    Every business event (§44's 9 `NotificationType` values) enqueues a
+    BullMQ `notification` job; the worker does persistence
+    (`notifications` table, §46) and FCM delivery as two independent
+    steps — persistence is idempotent (upsert by a deterministic id
+    generated at enqueue time), so delivery is left free to throw on a
+    real gateway failure and let BullMQ's bounded retry/backoff (§43)
+    handle it without risking a duplicate notification row. Tokens FCM
+    reports invalid are removed from `user_devices` (§45).
+-   **The exact same "recurring `rides` GiST index" issue documented in
+    the 2026-08-14 entry above recurred a second time**, confirming it's
+    genuinely structural rather than a one-off: (1) Phase 11's own fix to
+    it collided with the *original* migration on a fresh shadow-database
+    replay (both tried to create the same index — Phase 11's fix had
+    only been validated against the one already-migrated dev DB it was
+    written for, not a from-scratch environment); fixed with
+    `CREATE INDEX IF NOT EXISTS`. (2) Once that was resolved, Prisma's
+    diff engine proposed the *same* erroneous `DROP INDEX` pair again in
+    this phase's own new migration, for a schema change with nothing to
+    do with `rides`. Both fixed without a destructive `prisma migrate
+    reset` — corrected the migration files and updated their stored
+    checksums directly (`_prisma_migrations.checksum`) to match,
+    preserving all dev data. A standing process rule is now recorded in
+    steps.md §28: always `prisma migrate dev --create-only` and strip
+    these two `DROP INDEX` statements before applying, for as long as
+    `rides.origin`/`destination` stay `Unsupported`.
+-   **Real bug found and fixed during manual verification, unrelated to
+    the above**: `firebase-admin`'s `cert()` credential constructor
+    parses the private key *synchronously* and throws immediately if
+    it's not valid PEM — confirmed by an actual crash of the entire
+    process at import time against this environment's `.env` (whose
+    `FCM_PRIVATE_KEY` is not a real PEM key). Unlike Resend/Razorpay,
+    where a bad key only fails lazily on first real API call, a bad FCM
+    key was taking down the *whole backend* — auth, rides, payments,
+    everything — over a misconfigured push credential. Fixed by wrapping
+    `FirebasePushProvider` construction in try/catch inside
+    `createPushProvider()`, falling back to `ConsolePushProvider` on any
+    construction failure (logged), exactly like the "not configured"
+    case. Re-verified the server now boots and serves traffic normally
+    with the same invalid key still in `.env`.
+    only avoids pointless later job execution.

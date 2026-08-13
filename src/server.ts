@@ -1,6 +1,8 @@
 import { createApp } from './app/app.js';
 import { env } from './config/env.js';
 import { bookingExpiryWorker } from './infrastructure/queue/bookingExpiryWorker.js';
+import { notificationWorker } from './infrastructure/queue/notificationWorker.js';
+import { refundWorker } from './infrastructure/queue/refundWorker.js';
 
 const app = createApp();
 
@@ -10,7 +12,7 @@ const server = app.listen(env.PORT, () => {
 
 function shutdown(signal: string): void {
   console.log(`Received ${signal}, shutting down`);
-  Promise.all([bookingExpiryWorker.close()])
+  Promise.all([bookingExpiryWorker.close(), refundWorker.close(), notificationWorker.close()])
     .catch((err: unknown) => {
       console.error('Error closing background workers:', err);
     })

@@ -2,12 +2,20 @@ import { prisma } from '../../../infrastructure/database/prismaClient.js';
 import { mapProvider } from '../../../infrastructure/maps/index.js';
 import { paymentProvider, paymentProviderName } from '../../../infrastructure/payments/index.js';
 import * as paymentRecordService from '../../payment/services/paymentRecordService.js';
+import * as paymentRepository from '../../payment/repositories/paymentRepository.js';
+import * as transactionRepository from '../../payment/repositories/transactionRepository.js';
+import { scheduleRefund } from '../../payment/services/refundService.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
+import * as bookingRepository from '../../booking/repositories/bookingRepository.js';
+import { cancelScheduledBookingExpiry } from '../../booking/services/bookingExpiryService.js';
+import { createFinalPaymentOrdersForRide } from '../../booking/services/finalPaymentService.js';
+import * as notificationService from '../../notification/services/notificationService.js';
 import * as rideRepository from '../repositories/rideRepository.js';
 import type { RideRecord } from '../repositories/rideRepository.js';
 import { calculateFare } from './fareService.js';
 import { calculatePostingCommission } from './commissionService.js';
+import { calculateDriverCancellationRefund } from './cancellationPolicyService.js';
 import { assertVehicleEligibleForRide } from './vehicleEligibilityService.js';
 import type { CreateRideInput } from '../schemas/rideSchemas.js';
 
@@ -150,18 +158,86 @@ async function getOwnedRideOrThrow(driverId: string, rideId: string): Promise<Ri
   return ride;
 }
 
-// claude.md §19: transitions are conditional updates in the repository —
-// only a ride still in an allowed source state actually flips. Refunding
-// the posting commission / passenger prepayments on cancellation is
-// centralized cancellation-policy logic that belongs to Phase 11 (§31/§59);
-// no Booking/Payment/Transaction tables exist yet for this phase to touch.
+// claude.md §31/§34/§59 (Phase 11): driver cancellation cascades — every
+// still-active booking on the ride is cancelled and its seat released; a
+// booking that had actually been paid (CONFIRMED) gets its 10% prepayment
+// refunded in full; the driver's own 5% posting commission is refunded per
+// cancellationPolicyService's time-based rule, only if it was actually
+// captured. Refund intents are recorded as PENDING REFUND transactions
+// inside this same DB transaction (§59: "create refund records / refund
+// intents"); the actual PaymentProvider.refund() call is deferred to an
+// async BullMQ job scheduled after commit (§5.5: external calls are not
+// part of DB transactions).
 export async function cancelRide(driverId: string, rideId: string): Promise<RideDto> {
-  await getOwnedRideOrThrow(driverId, rideId);
+  const ride = await getOwnedRideOrThrow(driverId, rideId);
 
-  const applied = await rideRepository.cancel(rideId);
-  if (!applied) {
-    throw new AppError(409, 'INVALID_RIDE_STATE', 'Ride cannot be cancelled from its current state');
-  }
+  const refundPolicy = calculateDriverCancellationRefund(ride.postingCommissionAmount, ride.departureTime);
+
+  const { refundTransactionIds, expiredBookingIds, cancelledPassengerIds } = await prisma.$transaction(async (tx) => {
+    const applied = await rideRepository.cancel(tx, rideId);
+    if (!applied) {
+      throw new AppError(409, 'INVALID_RIDE_STATE', 'Ride cannot be cancelled from its current state');
+    }
+
+    const refundTransactionIds: string[] = [];
+    const expiredBookingIds: string[] = [];
+    const cancelledPassengerIds: string[] = [];
+
+    const activeBookings = await bookingRepository.findActiveByRideId(tx, rideId);
+    for (const booking of activeBookings) {
+      // Gate everything off cancel()'s own return value, not the snapshot
+      // above — a booking could have left the active set via a
+      // concurrently-committed tx (e.g. the passenger self-cancelling at
+      // the same moment) between the find and this call.
+      const cancelled = await bookingRepository.cancel(tx, booking.id);
+      if (!cancelled) {
+        continue;
+      }
+
+      await rideRepository.releaseSeats(tx, rideId, booking.seatCount);
+      cancelledPassengerIds.push(booking.passengerId);
+
+      if (booking.status === 'CONFIRMED') {
+        const refundTx = await transactionRepository.create(tx, {
+          userId: booking.passengerId,
+          bookingId: booking.id,
+          rideId,
+          type: 'REFUND',
+          amount: booking.prepaidAmount,
+          provider: paymentProviderName,
+          providerReference: null,
+        });
+        refundTransactionIds.push(refundTx.id);
+      } else {
+        // Was PENDING_PAYMENT — its scheduled TTL expiry job is now pointless.
+        expiredBookingIds.push(booking.id);
+      }
+    }
+
+    if (refundPolicy.refundAmount > 0) {
+      const originalPayment = await paymentRepository.findSuccessfulByRideId(tx, rideId);
+      if (originalPayment) {
+        const refundTx = await transactionRepository.create(tx, {
+          userId: driverId,
+          bookingId: null,
+          rideId,
+          type: 'REFUND',
+          amount: refundPolicy.refundAmount,
+          provider: paymentProviderName,
+          providerReference: null,
+        });
+        refundTransactionIds.push(refundTx.id);
+      }
+    }
+
+    return { refundTransactionIds, expiredBookingIds, cancelledPassengerIds };
+  });
+
+  await Promise.all([
+    ...refundTransactionIds.map((id) => scheduleRefund(id)),
+    ...expiredBookingIds.map((id) => cancelScheduledBookingExpiry(id)),
+    ...cancelledPassengerIds.map((passengerId) => notificationService.notifyRideCancelled(passengerId, rideId)),
+  ]);
 
   return getRide(rideId);
 }
@@ -174,6 +250,11 @@ export async function startRide(driverId: string, rideId: string): Promise<RideD
     throw new AppError(409, 'INVALID_RIDE_STATE', 'Ride cannot be started from its current state');
   }
 
+  const confirmedBookings = await bookingRepository.findConfirmedByRideId(rideId);
+  await Promise.all(
+    confirmedBookings.map((booking) => notificationService.notifyRideStarting(booking.passengerId, rideId)),
+  );
+
   return getRide(rideId);
 }
 
@@ -184,6 +265,17 @@ export async function completeRide(driverId: string, rideId: string): Promise<Ri
   if (!applied) {
     throw new AppError(409, 'INVALID_RIDE_STATE', 'Ride cannot be completed from its current state');
   }
+
+  const confirmedBookings = await bookingRepository.findConfirmedByRideId(rideId);
+  await Promise.all(
+    confirmedBookings.map((booking) => notificationService.notifyRideCompleted(booking.passengerId, rideId)),
+  );
+
+  // claude.md §41 (Phase 11): collect the remaining 90% from every CONFIRMED
+  // booking. External PaymentProvider calls, so kept outside the state
+  // transition above (§5.5); failures are logged per-booking and don't
+  // block the ride from being reported as COMPLETED.
+  await createFinalPaymentOrdersForRide(rideId);
 
   return getRide(rideId);
 }

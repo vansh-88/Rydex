@@ -159,6 +159,31 @@ enum TransactionStatus {
   @@map("transaction_status")
 }
 
+// claude.md §45: a user may have multiple devices — this is not a single
+// token-per-user field on User, it's its own table.
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+
+  @@map("device_platform")
+}
+
+// claude.md §44: the fixed initial set of notification types.
+enum NotificationType {
+  RIDE_BOOKED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  RIDE_CANCELLED
+  RIDE_STARTING
+  RIDE_COMPLETED
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  REFUND_PROCESSED
+
+  @@map("notification_type")
+}
+
 // --- Models ---
 
 model User {
@@ -198,6 +223,8 @@ model User {
   payments                Payment[]
   transactions            Transaction[]
   idempotencyKeys         IdempotencyKey[]
+  devices                 UserDevice[]
+  notifications           Notification[]
 
   @@map("users")
 }
@@ -368,6 +395,13 @@ model Booking {
   // nullable until that follow-up write lands.
   prepaymentOrderId String? @map("prepayment_order_id")
 
+  // claude.md §41 (Phase 11): set when the ride completes and the remaining
+  // 90% payment order is created for this booking (finalPaymentService,
+  // same "external call, then follow-up write" pattern as prepaymentOrderId
+  // above). Null until then; also null for bookings that never reach
+  // CONFIRMED (nothing to collect a final payment for).
+  finalPaymentOrderId String? @map("final_payment_order_id")
+
   status BookingStatus @default(PENDING_PAYMENT)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -461,4 +495,43 @@ model IdempotencyKey {
 
   @@unique([userId, key])
   @@map("idempotency_keys")
+}
+
+// claude.md §45. `deviceToken` is globally unique rather than
+// (userId, deviceToken) — a real device/app-install's FCM token is a single
+// physical identity; if a different account logs in on the same device, the
+// token is reassigned to that user (upsert-by-token, never two rows racing
+// to own the same token).
+model UserDevice {
+  id          String         @id @default(uuid()) @db.Uuid
+  userId      String         @map("user_id") @db.Uuid
+  deviceToken String         @unique @map("device_token")
+  platform    DevicePlatform
+  lastSeenAt  DateTime       @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_devices")
+}
+
+// claude.md §46: in-app notification history — a separate concern from FCM
+// delivery (a push-delivery failure must never prevent this row from
+// existing, and vice versa).
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?        @map("read_at") @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
 }

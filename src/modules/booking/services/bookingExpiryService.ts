@@ -1,5 +1,6 @@
 import { prisma } from '../../../infrastructure/database/prismaClient.js';
 import { bookingExpiryQueue } from '../../../infrastructure/queue/queues.js';
+import * as notificationService from '../../notification/services/notificationService.js';
 import * as rideRepository from '../../ride/repositories/rideRepository.js';
 import * as bookingRepository from '../repositories/bookingRepository.js';
 
@@ -31,12 +32,17 @@ export async function processBookingExpiry(bookingId: string): Promise<void> {
     return;
   }
 
-  await prisma.$transaction(async (tx) => {
-    const expired = await bookingRepository.expireIfPending(tx, bookingId);
-    if (expired) {
+  const expired = await prisma.$transaction(async (tx) => {
+    const applied = await bookingRepository.expireIfPending(tx, bookingId);
+    if (applied) {
       await rideRepository.releaseSeats(tx, booking.rideId, booking.seatCount);
     }
+    return applied;
   });
+
+  if (expired) {
+    await notificationService.notifyBookingCancelled(booking.passengerId, bookingId);
+  }
 }
 
 // §97 (2026-08-13): once a booking reaches a terminal-for-the-TTL's-purpose

@@ -69,8 +69,12 @@ The logical services/modules are:
 4.  Booking
 5.  Payment
 6.  Notification
+7.  Support (AI Chatbot) — see §96.5
 
-They run inside one Node.js application initially.
+They run inside one Node.js application initially. Support stays a
+module inside the same monolith, not a separate service — the
+provider-independence requirement (§96.5) is about swapping the LLM
+vendor, not about deployment topology.
 
 ``` text
                     Rydex Backend
@@ -368,7 +372,14 @@ UserDevice
 Conversation
 Message
 RefreshToken
+SupportConversation
+SupportMessage
 ```
+
+`SupportConversation`/`SupportMessage` (§96.5) are the AI support
+chatbot's data — distinct from `Conversation`/`Message`, which remain
+the passenger-driver chat (§47). Two separate entity pairs, two
+separate modules.
 
 There is intentionally no:
 
@@ -383,7 +394,9 @@ There is intentionally no:
 -   cab marketplace
 -   DigiLocker integration
 
-These are out of scope.
+These are out of scope. `SupportConversation`/`SupportMessage` are AI
+chatbot conversation logs, not a support-ticket/queue/SLA system — the
+"no support ticket" exclusion above still holds; see §96.5.
 
 Normal application/operational logs are still required. "No audit logs"
 does not mean "no logging."
@@ -2196,6 +2209,15 @@ POST /api/v1/admin/vehicles/:id/verify
 POST /api/v1/admin/vehicles/:id/reject
 ```
 
+AI Support Chatbot (§96.5):
+
+``` text
+POST /api/v1/support/conversations
+GET  /api/v1/support/conversations
+GET  /api/v1/support/conversations/:id
+POST /api/v1/support/conversations/:id/messages
+```
+
 Exact endpoints may be refined during LLD, but preserve domain
 boundaries.
 
@@ -2354,6 +2376,12 @@ INVALID_WEBHOOK_SIGNATURE
 INVALID_WEBHOOK_PAYLOAD
 
 REFUND_FAILED
+
+SUPPORT_CONVERSATION_NOT_FOUND
+MESSAGE_TOO_LONG
+AI_PROVIDER_ERROR
+AI_PROVIDER_TIMEOUT
+AI_PROVIDER_RATE_LIMITED
 ```
 
 Never expose stack traces to clients.
@@ -2414,6 +2442,9 @@ notifications(user_id, created_at)
 messages(conversation_id, created_at)
 
 refresh_tokens(user_id)
+
+support_conversations(user_id, last_message_at)
+support_messages(conversation_id, created_at)
 ```
 
 Exact composite indexes should be finalized after query design.
@@ -2604,6 +2635,17 @@ FINAL_PAYMENT_PERCENT
 PLATFORM_COMMISSION_PERCENT
 DRIVER_EARLY_CANCEL_REFUND_PERCENT
 DRIVER_CANCEL_THRESHOLD_HOURS
+
+AI_PROVIDER
+GROK_API_KEY
+GROK_MODEL
+SUPPORT_CHAT_MAX_MESSAGE_LENGTH
+SUPPORT_CHAT_MAX_HISTORY_MESSAGES
+SUPPORT_CHAT_PROVIDER_TIMEOUT_MS
+SUPPORT_CHAT_MAX_TOOL_ROUNDS
+SUPPORT_CHAT_RATE_LIMIT_MAX
+SUPPORT_CHAT_RATE_LIMIT_WINDOW_SECONDS
+SUPPORT_CHAT_DAILY_MESSAGE_LIMIT
 ```
 
 Never commit secrets.
@@ -2934,7 +2976,14 @@ src/
 │   ├── booking/
 │   ├── payment/
 │   ├── notification/
-│   └── admin/
+│   ├── admin/
+│   └── support/
+│       ├── controllers/
+│       ├── services/
+│       ├── repositories/
+│       ├── schemas/
+│       ├── prompts/
+│       └── routes.ts
 │
 ├── infrastructure/
 │   ├── database/
@@ -2944,7 +2993,8 @@ src/
 │   ├── resend/
 │   ├── fcm/
 │   ├── payments/
-│   └── maps/
+│   ├── maps/
+│   └── ai/
 │
 ├── shared/
 │   ├── errors/
@@ -3714,7 +3764,16 @@ Use metrics to identify actual bottlenecks before optimizing.
       +-- messages
       +-- refresh tokens
       +-- idempotency
+      +-- support_conversations
+      +-- support_messages
 ```
+
+The `Support` module (§96.5) sits alongside the modules in the row
+above (Auth/User/Vehicle/Ride/Booking/Payment/Notification) — omitted
+from the box diagram above for width, not architecturally separate.
+Its external dependency is an AI Provider (Grok/xAI initially),
+alongside Resend/FCM/Cloudinary/Maps/Payment Provider in the External
+APIs group.
 
 ------------------------------------------------------------------------
 
@@ -3863,6 +3922,188 @@ files live in `vehicle_documents`.
 No new audit-log system is introduced (§6 keeps that out of scope) —
 these fields are sufficient to know who decided what and when for this
 MVP.
+
+------------------------------------------------------------------------
+
+## 96.5 AI Support Module (Chatbot)
+
+Added after the Admin Module (§96), following the same pattern: a
+narrow, clearly-scoped module rather than a general capability.
+
+This is a SUPPORT / USER-HELP chatbot — general Rydex help, how
+ride/booking/payment/cancellation flows work, and status lookups for
+the authenticated user's own bookings/rides. It is NOT the
+passenger-driver chat (§47, steps.md Phase 13), which remains a
+separate Socket.IO module tied to a ride. The two systems share no
+code, no data model, and no routes.
+
+### Provider abstraction
+
+``` text
+AIProvider
+   |
+   +-- GrokProvider (initial)
+   |
+   +-- OpenAIProvider / GeminiProvider / ClaudeProvider (future)
+```
+
+`ChatbotService` depends only on `AIProvider`. Selected via
+`AI_PROVIDER` env var through `infrastructure/ai/index.ts`, mirroring
+`infrastructure/maps/index.ts` and `infrastructure/payments/index.ts`
+exactly — a factory keyed off config, never a concrete class imported
+by a consumer. `GrokProvider` talks to xAI's OpenAI-compatible REST API
+via `fetch`, no vendor SDK, same approach as `GeoapifyMapProvider`. When
+`GROK_API_KEY` is unset, the factory falls back to a `ConsoleAIProvider`
+(logs the would-be prompt/response instead of calling out), matching
+the configured-vs-console-fallback pattern `infrastructure/resend/
+index.ts` and `infrastructure/fcm/index.ts` already use — local
+development never requires a real key.
+
+Grok is the initial provider because it is free/low-cost for
+development — this is a convenience choice, not an architectural one.
+The interface must make a future provider swap a pure infrastructure
+change.
+
+### Tool / context layer
+
+The AI must never query PostgreSQL directly and must never generate
+SQL. User-specific answers ("what's the status of my booking?") are
+answered only through a whitelisted, ownership-checked tool layer:
+
+``` text
+ChatbotController
+       |
+ChatbotService
+       |
+AIProvider.complete() — messages + tool definitions
+       |
+model requests a tool call
+       |
+backend executes ONLY a whitelisted function, using the
+authenticated user's ID from server-side session state
+(never from the model's output)
+       |
+tool result appended, fed back to the model
+(bounded to a configurable max number of rounds)
+       |
+final text response
+```
+
+Initial tool registry:
+
+``` text
+getMyRecentBookings(userId)
+getBookingStatus(userId, bookingId)
+getMyRecentRidesAsDriver(userId)
+getRideStatus(rideId)
+```
+
+`getBookingStatus`/`getRideStatus` reuse the existing
+`bookingService.getBooking`/`rideService.getRide` ownership-checked
+lookups. `getMyRecentBookings`/`getMyRecentRidesAsDriver` are new
+read-only list methods (no list-style query currently exists in
+`bookingService`/`rideService` — only single-record lookups). Payment
+and cancellation/refund status tools follow the same pattern once
+Phase 10/11 exist, which they will by the time Phase 13.5 is reached.
+
+A tool call requesting another user's data is rejected by the tool
+function itself, regardless of what the model asks for — the
+authorization boundary is enforced in backend code, not by prompting.
+
+Concretely: the JSON tool-schemas exposed to the model never include a
+`userId`/identity parameter at all — only resource-scoped parameters
+such as `bookingId`/`rideId`. The model's only degree of freedom is
+*which* tool to call and *which resource id* to pass, extracted from
+the conversation. `ChatbotService`'s tool executor always binds
+`userId` itself from the authenticated request context when invoking
+the underlying function, and ignores any identity-shaped field if one
+appears in the model's arguments anyway. "Is this user allowed to see
+this resource?" is therefore never a question the model is asked or
+able to answer — it's a fact resolved entirely by existing
+ownership-checked service methods before any data reaches the model.
+
+### Knowledge / FAQ
+
+Rydex-specific facts (commission %, prepayment %, cancellation
+thresholds, search radius) are built into the system prompt from the
+same configuration/business-rule constants already centralized
+elsewhere (§85) — not duplicated as separate hardcoded text. No vector
+database / RAG at this stage; the system prompt plus the tool layer is
+sufficient at current scale. A proper RAG layer can be added later
+without changing `ChatbotService`'s shape if the FAQ surface grows.
+
+### Data model
+
+``` text
+support_conversations
+----------------------
+id UUID PK
+user_id FK users
+status              -- OPEN | RESOLVED | ESCALATED
+escalation_reason    -- nullable
+escalated_at         -- nullable
+last_message_at
+created_at
+updated_at
+
+support_messages
+-----------------
+id UUID PK
+conversation_id FK support_conversations
+role                 -- SYSTEM | USER | ASSISTANT | TOOL
+content              -- nullable (tool-call-only assistant turns)
+tool_call_id         -- nullable
+tool_name            -- nullable
+tool_arguments       -- JSONB, nullable
+tool_calls           -- JSONB, nullable (assistant's requested calls)
+provider             -- nullable
+model                -- nullable
+prompt_tokens        -- nullable
+completion_tokens    -- nullable
+status               -- COMPLETED | FAILED
+error_code           -- nullable
+created_at
+```
+
+`status = ESCALATED` plus `escalation_reason`/`escalated_at` exist so a
+future human-support queue can be built without a schema migration —
+see §9-style escalation in the product requirement this module
+implements. No separate ticket/case table is introduced now — see §6.
+
+### API
+
+``` text
+POST /api/v1/support/conversations
+GET  /api/v1/support/conversations
+GET  /api/v1/support/conversations/:id
+POST /api/v1/support/conversations/:id/messages
+```
+
+Synchronous HTTP request/response, matching "HTTP API initially" — no
+BullMQ queue for a chat turn itself. Authenticated, ownership-checked
+(a user may only read/post to their own conversations), same
+`authenticate` + service-level ownership-check convention as every
+other module.
+
+### Safety and failure handling
+
+The chatbot must not invent fares, refunds, booking/payment status, or
+other users' data. The system prompt defines it as a Rydex support
+assistant, not a human agent, and instructs it to say it cannot
+determine an answer rather than guess. Provider failures (timeout,
+rate limit, malformed response, quota exhaustion) are caught and
+surfaced as a clean `AI_PROVIDER_ERROR`/`AI_PROVIDER_TIMEOUT`
+application error (§55) — never a raw provider error or API key to the
+client. The user's message is persisted before the provider call, so a
+failure never loses what the user typed.
+
+### Cost control
+
+Reuses `infrastructure/redis/rateLimit.ts` (the same factory
+`auth/routes.ts` already uses) for per-user and per-IP limits on the
+chat endpoints, plus: max message length, max conversation history
+sent to the provider, provider timeout, bounded tool-call rounds, and
+an optional daily per-user message cap. No AI usage billing system.
 
 ------------------------------------------------------------------------
 
@@ -4119,3 +4360,48 @@ Record of intentional decisions made after the initial draft, per §91.
     case. Re-verified the server now boots and serves traffic normally
     with the same invalid key still in `.env`.
     only avoids pointless later job execution.
+
+### 2026-08-16
+
+-   **AI Support Chatbot added as a new module (§96.5) and phase
+    (steps.md Phase 13.5).** Product requirement: an AI-assisted
+    support chatbot for general Rydex help and account-context support
+    (booking/ride status), kept fully separate from the existing
+    passenger-driver chat (§47, Phase 13) — different module, different
+    tables (`SupportConversation`/`SupportMessage` vs
+    `Conversation`/`Message`), different transport (HTTP vs Socket.IO).
+-   **`AIProvider` strategy interface adopted, mirroring `MapProvider`
+    (§17) and `PaymentProvider` (§37) exactly** — `ChatbotService`
+    depends only on the interface, selected via `AI_PROVIDER` env var
+    through a factory in `infrastructure/ai/index.ts`. Grok/xAI is the
+    initial implementation, chosen for the same reason Geoapify was
+    (§97, 2026-08-12): free/low-cost with no payment method required.
+    This is a convenience choice, not an architectural one — OpenAI,
+    Gemini, and Claude remain valid future targets behind the same
+    interface with no `ChatbotService` changes.
+-   **Real LLM tool-calling chosen over server-side context injection
+    for the user-data context layer**, after considering both:
+    tool-calling is what the product requirement's "AIProvider → Tool/
+    Context Layer → domain services" diagram literally describes, and
+    Grok's API is OpenAI-compatible so tool-calling is native rather
+    than bolted on. The authorization boundary is enforced entirely in
+    backend code, not by prompting: tool JSON-schemas exposed to the
+    model never include a `userId`/identity parameter, only
+    resource-scoped ids (`bookingId`/`rideId`); the executor always
+    binds `userId` from the authenticated request context. The model's
+    only degree of freedom is which tool to call and which resource id
+    to pass — never who is allowed to see it.
+-   **Placed at Phase 13.5**, after Chat (13) and before Security (14).
+    The real dependency is Phases 9–12 (Booking/Payment/Cancellation/
+    Notifications) existing so the tool layer has real data to query —
+    all of which precede 13.5 regardless of Chat's position.
+-   **No human-support escalation system, RAG/vector search, automated
+    tests, or new logging infrastructure introduced in this phase** —
+    `SupportConversation.status` gaining an `ESCALATED` value plus
+    nullable `escalationReason`/`escalatedAt` fields is the only
+    concession to future escalation (mirrors how §96's admin
+    verification fields hold a decision without a full workflow
+    engine). No logger exists anywhere in this codebase yet (see
+    `README.md`); this module doesn't special-case that either — errors
+    flow through the existing `errorHandler` middleware like every
+    other module.

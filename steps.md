@@ -91,6 +91,7 @@ Phase 10 → Payment system
 Phase 11 → Cancellation + refunds + settlement
 Phase 12 → Notification system
 Phase 13 → Chat
+Phase 13.5 → AI Support Chatbot
 Phase 14 → Security + rate limiting
 Phase 15 → Testing + hardening
 Phase 16 → Production Docker + AWS deployment preparation
@@ -2106,6 +2107,162 @@ reasoning as Phase 12's notes).
 
 ------------------------------------------------------------------------
 
+# 17.5. Phase 13.5 --- AI Support Chatbot
+
+## Goal
+
+Implement an AI-assisted support chatbot for general Rydex help and
+basic account-context support, kept fully independent of the
+passenger-driver chat built in Phase 13. See `claude.md` §96.5 for the
+full architectural design — this phase implements it.
+
+This is a SUPPORT / USER-HELP chatbot, not the passenger-driver chat.
+It shares no module, no data model, and no routes with `src/modules/
+chat/`. `SupportConversation`/`SupportMessage` are separate entities
+from `Conversation`/`Message`.
+
+## Module and infrastructure layout
+
+``` text
+src/modules/support/
+    controllers/
+    services/
+    repositories/
+    schemas/
+    prompts/
+    routes.ts
+
+src/infrastructure/ai/
+    aiProvider.ts
+    grokAiProvider.ts
+    index.ts
+```
+
+## Database
+
+``` text
+support_conversations
+support_messages
+```
+
+One migration, following the existing one-migration-per-feature
+convention. Watch for the standing `rides` GiST-index migration-drift
+issue (§28) even though this migration doesn't touch `rides` —
+confirmed to recur on unrelated schema changes, so always
+`prisma migrate dev --create-only` and inspect the generated SQL
+before applying.
+
+## AIProvider abstraction
+
+``` text
+AIProvider
+   |
+   +-- GrokProvider (initial, xAI, OpenAI-compatible REST via fetch)
+```
+
+Selected via `AI_PROVIDER` env var, wired through
+`infrastructure/ai/index.ts` exactly like `infrastructure/maps/
+index.ts` and `infrastructure/payments/index.ts`. `ChatbotService`
+imports only the interface-typed singleton, never `GrokProvider`
+directly. When `GROK_API_KEY` is unset, fall back to a
+`ConsoleAIProvider` (logs instead of calling out), same
+configured-vs-console pattern as `infrastructure/resend/index.ts` and
+`infrastructure/fcm/index.ts` — no real key required for local dev.
+
+## Tool / context layer
+
+``` text
+ChatbotService
+   |
+AIProvider.complete() with tool definitions
+   |
+model requests a tool call
+   |
+backend executes ONLY a whitelisted, ownership-checked function
+   |
+tool result fed back to the model (bounded to
+SUPPORT_CHAT_MAX_TOOL_ROUNDS rounds)
+   |
+final text response
+```
+
+Initial tool registry (all take the authenticated user's ID from
+server-side session state, injected by the tool executor — never a
+parameter the model can set):
+
+``` text
+getMyRecentBookings(userId)
+getBookingStatus(userId, bookingId)
+getMyRecentRidesAsDriver(userId)
+getRideStatus(rideId)
+```
+
+`getMyRecentBookings`/`getMyRecentRidesAsDriver` are new read-only
+service methods (`bookingService`/`rideService` currently only have
+single-record lookups, not "list mine"). `getBookingStatus`/
+`getRideStatus` reuse the existing `bookingService.getBooking`/
+`rideService.getRide`. Payment/refund status tools follow the same
+pattern, reusing `paymentService`/cancellation-settlement code from
+Phases 10/11 (already implemented by this point in the build order).
+
+## Knowledge / FAQ
+
+Build the system prompt's Rydex-specific facts (commission %,
+prepayment %, cancellation policy, search radius) from the same
+config/business-rule constants used elsewhere (§85) — do not duplicate
+magic numbers in a separate FAQ file. No vector DB / RAG at this
+stage.
+
+## API
+
+``` text
+POST /api/v1/support/conversations
+GET  /api/v1/support/conversations
+GET  /api/v1/support/conversations/:id
+POST /api/v1/support/conversations/:id/messages
+```
+
+Synchronous HTTP request/response — no BullMQ queue for the chat turn
+itself. Authenticated; ownership-checked the same way `GET /bookings/
+:id` and `GET /conversations/:id/messages` already are — a
+non-participant gets `SUPPORT_CONVERSATION_NOT_FOUND`, not a
+distinguishable "forbidden" (existence isn't leaked).
+
+## Safety
+
+``` text
+tool layer enforces ownership regardless of what the model asks for
+system prompt defines the assistant's identity and scope
+model never invents fares, refunds, booking/payment status
+```
+
+## Cost control
+
+``` text
+per-user + per-IP rate limiting (reuse infrastructure/redis/
+    rateLimit.ts, same factory auth/routes.ts already uses)
+max message length
+max conversation history sent to the provider
+provider timeout
+bounded tool-call rounds
+optional daily per-user message cap
+```
+
+## Out of scope for this phase
+
+``` text
+human support escalation UI/queue (schema leaves room via
+    SupportConversation.status = ESCALATED, nothing more)
+RAG / vector search
+automated tests
+dedicated logging/observability infrastructure
+    (no logger exists anywhere in the repo yet; this phase does not
+    introduce one either — errors flow through the existing
+    errorHandler middleware like every other module)
+```
+
+------------------------------------------------------------------------
+
 # 18. Phase 14 --- Security + Rate Limiting
 
 ## Goal
@@ -2141,6 +2298,7 @@ booking
 payment creation
 login/auth endpoints
 WebSocket connection
+AI support chat
 ```
 
 Use Redis so limits work across multiple backend instances.
@@ -2355,6 +2513,7 @@ Claude must maintain this checklist.
 [x] Phase 11 — Cancellation + Settlement
 [x] Phase 12 — Notifications
 [x] Phase 13 — Chat
+[ ] Phase 13.5 — AI Support Chatbot
 [ ] Phase 14 — Security
 [ ] Phase 15 — Testing + Hardening
 [ ] Phase 16 — Production Deployment Preparation

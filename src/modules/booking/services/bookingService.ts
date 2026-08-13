@@ -5,6 +5,7 @@ import * as paymentRecordService from '../../payment/services/paymentRecordServi
 import * as rideRepository from '../../ride/repositories/rideRepository.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as notificationService from '../../notification/services/notificationService.js';
+import * as conversationService from '../../chat/services/conversationService.js';
 import * as bookingRepository from '../repositories/bookingRepository.js';
 import type { BookingRecord } from '../repositories/bookingRepository.js';
 import type { CreateBookingInput } from '../schemas/bookingSchemas.js';
@@ -127,6 +128,12 @@ export async function createBooking(
   // claude.md §42: fire-and-forget enqueue, never awaited-through to actual
   // delivery — does not block this response on FCM.
   await notificationService.notifyRideBooked(ride.driverId, rideId, input.seatCount);
+
+  // claude.md §47: lazily create the driver<->passenger conversation for this
+  // ride the first time this passenger has a reason to talk to the driver.
+  // Idempotent (unique on rideId+passengerId) — a second booking by the same
+  // passenger on the same ride just reuses it.
+  await conversationService.getOrCreateConversationForRide(rideId, ride.driverId, passengerId);
 
   return {
     booking: toBookingDto({ ...booking, prepaymentOrderId: order.providerOrderId }),

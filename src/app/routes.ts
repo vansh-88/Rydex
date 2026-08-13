@@ -3,6 +3,7 @@ import type { Express } from 'express';
 import { adminRouter } from '../modules/admin/routes.js';
 import { authRouter } from '../modules/auth/routes.js';
 import { bookingRouter } from '../modules/booking/routes.js';
+import { chatRouter } from '../modules/chat/routes.js';
 import { notificationRouter } from '../modules/notification/routes.js';
 import { webhookRouter } from '../modules/payment/routes.js';
 import { rideRouter } from '../modules/ride/routes.js';
@@ -18,6 +19,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/v1/vehicles', vehicleRouter);
   app.use('/api/v1/rides', rideRouter);
   app.use('/api/v1/bookings', bookingRouter);
+  app.use('/api/v1/conversations', chatRouter);
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/webhooks', webhookRouter);
 }

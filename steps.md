@@ -1999,6 +1999,111 @@ Do not allow a user to join arbitrary conversation IDs.
 When running multiple backend instances, use Redis-backed Socket.IO
 adapter/backplane.
 
+## Status: complete
+
+Implemented `Conversation`/`Message` Prisma models (migration
+`20260813053512_chat_conversations_messages`) and the full chat module
+(`src/modules/chat/`), plus a Socket.IO gateway
+(`src/infrastructure/socket/socketServer.ts`,
+`src/modules/chat/socket/chatGateway.ts`) wired into `server.ts`, which now
+creates an explicit `http.Server` (so both HTTP and WebSocket traffic share
+one port) instead of relying on `app.listen()`'s internal one.
+
+**One conversation per (ride, passenger) pair**, not one shared room per
+ride — `claude.md` §47's conceptual schema (`ride_id`, `driver_id`,
+`passenger_id` on one `conversations` row) already implies this: the driver
+talks to each passenger separately. Enforced by a `@@unique([rideId,
+passengerId])` constraint. `driverId` is denormalized from `ride.driverId`
+at creation time (a ride's driver never changes post-creation, so this
+never goes stale) so authorization checks never need to join through `Ride`.
+
+**Conversations are created lazily**, not via a dedicated REST endpoint —
+`bookingService.createBooking` calls
+`conversationService.getOrCreateConversationForRide` right after a booking
+is created (mirroring where `notifyRideBooked` already fires), the first
+time a given passenger has a reason to talk to the ride's driver. Idempotent
+via the unique constraint, so a second booking by the same passenger on the
+same ride reuses the existing conversation. Not gated on booking/payment
+status — either party may reasonably want to talk before payment confirms.
+
+**REST endpoints beyond what claude.md §47/§51 explicitly lists** — `GET
+/api/v1/conversations` (list the caller's conversations, newest-first,
+cursor-paginated, each with a `counterpart` {id, name} and `lastMessage`
+preview) and `GET /api/v1/conversations/:id/messages` (cursor-paginated
+history). §47 only specifies the WebSocket flow and entities, not a REST
+surface, but a chat client has no way to discover conversation IDs or load
+history without one — engineering necessity, not a business-policy
+invention (claude.md §90/§26: same cursor-pagination shape as
+notifications/ride-search, `{items, nextCursor}`, opaque base64url cursor).
+Message *sending* stays WebSocket-only, matching §47's diagram exactly — no
+REST POST-message endpoint exists.
+
+**WebSocket flow implemented exactly as specified**: `io.use()` middleware
+authenticates via the same `verifyAccessToken()` HTTP's `authenticate`
+middleware uses (token read from `socket.handshake.auth.token`, falling
+back to an `Authorization: Bearer` header), storing `{id, role}` on
+`socket.data`. `join_conversation` and `send_message` both independently
+call `conversationService.authorizeParticipant` — join does not grant
+send any special trust, since "do not trust conversation IDs from the
+client" (§47) means a client could emit `send_message` without ever
+joining. A non-participant gets `CONVERSATION_NOT_FOUND` from both events
+(404-equivalent — existence isn't leaked, same pattern as
+`bookingService.getBooking`/vehicle ownership checks elsewhere in this
+codebase) rather than a distinguishable "forbidden." Messages are persisted
+then emitted only to the `conversation:{id}` room (Socket.IO room, joined
+only by authorized sockets) — never broadcast wider.
+
+**Multi-instance readiness** (§67): `createSocketServer` attaches
+`@socket.io/redis-adapter` using two `redis.duplicate()` connections
+(pub/sub mode needs dedicated connections, can't share the general-purpose
+`infrastructure/redis` client that also serves OTP/rate-limiting). Not
+independently load-tested against a second running instance in this phase
+(no second instance was stood up) — the adapter wiring itself was verified
+correct (server boots cleanly, no adapter connection errors in logs) and is
+the same pattern claude.md documents (§67) and BullMQ already uses
+elsewhere in this codebase (`infrastructure/queue/connection.ts`) for the
+same "needs its own Redis connection" reason.
+
+No migration drift beyond the third recurrence of the standing `rides`
+GiST-index issue (steps.md §28) — stripped the same two spurious `DROP
+INDEX` statements from this migration's generated SQL before applying, per
+the existing process rule. No other schema drift.
+
+Verified end-to-end against the real Postgres/Redis stack (no automated
+test infra yet, per the Phase 3 note; `RESEND_API_KEY` temporarily blanked
+for console-logged OTPs, restored afterward) using an existing
+driver/passenger/ride from earlier phase testing: booking a ride correctly
+auto-created exactly one `conversations` row (confirmed directly in
+Postgres); `GET /conversations` returned the correct `counterpart` from
+each side (driver sees the passenger's name and vice versa); `GET
+/conversations/:id/messages` correctly scoped — a third user (the seeded
+admin, a genuine non-participant) got 404 `CONVERSATION_NOT_FOUND` from
+both a real conversation id and a random UUID, indistinguishably. Over a
+real WebSocket connection (`socket.io-client`): connecting without a token
+or with a garbage token was rejected at the `connect_error` stage before
+ever reaching `connection`; the non-participant admin's `join_conversation`
+and `send_message` both got `CONVERSATION_NOT_FOUND` acks and never
+received the `message` broadcast; the driver and passenger both joined
+successfully; a message sent by the driver was persisted (visible
+immediately via the REST message-history endpoint), broadcast to the
+passenger (received the `message` event), and correctly *not* broadcast to
+the admin socket (never joined the room); an empty message and a
+non-UUID `conversationId` both correctly got `VALIDATION_ERROR` acks
+without persisting anything. Cursor pagination over 4 messages at
+`limit=2` walked two full pages with no duplicates/gaps, then correctly
+returned an empty final page with `nextCursor: null`; a malformed cursor on
+the REST endpoint → 400 `INVALID_CURSOR`. `npm run typecheck`, `npm run
+lint`, and `npm run build` all pass.
+
+Not built in this phase, intentionally out of scope: read receipts beyond
+the `readAt` column already existing on `Message` (no endpoint sets it —
+claude.md §47 doesn't specify a mark-read flow for chat, unlike
+notifications' explicit `PATCH .../read`, so none was invented); typing
+indicators/presence (not specified); push notifications for new chat
+messages (claude.md §44's `NotificationType` enum has no chat-message
+value — out of scope per the same "don't invent business requirements"
+reasoning as Phase 12's notes).
+
 ------------------------------------------------------------------------
 
 # 18. Phase 14 --- Security + Rate Limiting
@@ -2249,7 +2354,7 @@ Claude must maintain this checklist.
 [x] Phase 10 — Payment
 [x] Phase 11 — Cancellation + Settlement
 [x] Phase 12 — Notifications
-[ ] Phase 13 — Chat
+[x] Phase 13 — Chat
 [ ] Phase 14 — Security
 [ ] Phase 15 — Testing + Hardening
 [ ] Phase 16 — Production Deployment Preparation

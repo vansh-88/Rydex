@@ -186,6 +186,43 @@ enum NotificationType {
 
 // --- Models ---
 
+// claude.md §47 (Phase 13): one conversation per (ride, passenger) pair —
+// the driver talks to each passenger separately, not one shared ride-wide
+// room. driverId is denormalized from ride.driverId at creation time so a
+// socket-join authorization check never needs to join through Ride (a stale
+// copy is fine: a ride's driver never changes after creation, claude.md §15
+// has no reassign-driver flow).
+model Conversation {
+  id          String   @id @default(uuid()) @db.Uuid
+  rideId      String   @map("ride_id") @db.Uuid
+  driverId    String   @map("driver_id") @db.Uuid
+  passengerId String   @map("passenger_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ride      Ride      @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  driver    User      @relation("ConversationDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  passenger User      @relation("ConversationPassenger", fields: [passengerId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([rideId, passengerId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String    @id @default(uuid()) @db.Uuid
+  conversationId String    @map("conversation_id") @db.Uuid
+  senderId       String    @map("sender_id") @db.Uuid
+  message        String
+  readAt         DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
 model User {
   id              String     @id @default(uuid()) @db.Uuid
   email           String     @unique
@@ -212,19 +249,22 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  refreshTokens           RefreshToken[]
-  documents               UserDocument[]
-  vehicles                Vehicle[]        @relation("VehicleOwner")
-  verifiedVehicles        Vehicle[]        @relation("VehicleVerifiedBy")
-  driverLicenseVerifiedBy User?            @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
-  verifiedDriverLicenses  User[]           @relation("DriverLicenseVerifiedBy")
-  ridesDriven             Ride[]           @relation("RideDriver")
-  bookings                Booking[]
-  payments                Payment[]
-  transactions            Transaction[]
-  idempotencyKeys         IdempotencyKey[]
-  devices                 UserDevice[]
-  notifications           Notification[]
+  refreshTokens            RefreshToken[]
+  documents                UserDocument[]
+  vehicles                 Vehicle[]        @relation("VehicleOwner")
+  verifiedVehicles         Vehicle[]        @relation("VehicleVerifiedBy")
+  driverLicenseVerifiedBy  User?            @relation("DriverLicenseVerifiedBy", fields: [driverLicenseVerifiedById], references: [id], onDelete: SetNull)
+  verifiedDriverLicenses   User[]           @relation("DriverLicenseVerifiedBy")
+  ridesDriven              Ride[]           @relation("RideDriver")
+  bookings                 Booking[]
+  payments                 Payment[]
+  transactions             Transaction[]
+  idempotencyKeys          IdempotencyKey[]
+  devices                  UserDevice[]
+  notifications            Notification[]
+  conversationsAsDriver    Conversation[]   @relation("ConversationDriver")
+  conversationsAsPassenger Conversation[]   @relation("ConversationPassenger")
+  messages                 Message[]
 
   @@map("users")
 }
@@ -353,11 +393,12 @@ model Ride {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  driver       User          @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  vehicle      Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  bookings     Booking[]
-  payments     Payment[]
-  transactions Transaction[]
+  driver        User           @relation("RideDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle       Vehicle        @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  bookings      Booking[]
+  payments      Payment[]
+  transactions  Transaction[]
+  conversations Conversation[]
 
   @@index([driverId])
   @@index([vehicleId])

@@ -42,6 +42,7 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^6.1.0",
     "cloudinary": "^2.10.0",
@@ -56,6 +57,7 @@
     "pg": "^8.23.0",
     "razorpay": "^2.9.8",
     "resend": "^6.18.1",
+    "socket.io": "^4.8.3",
     "zod": "^4.4.3"
   }
 }

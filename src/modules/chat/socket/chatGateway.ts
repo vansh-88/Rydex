@@ -1,6 +1,8 @@
 import type { Server, Socket } from 'socket.io';
 
+import { env } from '../../../config/env.js';
 import type { UserRole } from '../../../generated/prisma/enums.js';
+import { consumeRateLimit } from '../../../infrastructure/redis/rateLimit.js';
 import { verifyAccessToken } from '../../auth/services/tokenService.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import { joinConversationPayloadSchema, sendMessagePayloadSchema } from '../schemas/chatSchemas.js';
@@ -54,13 +56,37 @@ export function registerChatGateway(io: Server): void {
       return;
     }
 
+    let payload;
     try {
-      const payload = verifyAccessToken(token);
-      socket.data = { id: payload.sub, role: payload.role } satisfies SocketUser;
-      next();
+      payload = verifyAccessToken(token);
     } catch {
       next(new Error('UNAUTHORIZED'));
+      return;
     }
+
+    // claude.md §49 lists "WebSocket connection" as its own rate-limit
+    // category. Applied after authentication so the limit is keyed to a real
+    // user rather than a spoofable IP — and so an unauthenticated flood is
+    // rejected by the cheaper check first. Shares the Redis-backed limiter
+    // used by every HTTP route (§66: the limit must hold across instances,
+    // and a socket can land on any of them).
+    consumeRateLimit(
+      'ws-connect-user',
+      payload.sub,
+      env.WS_CONNECT_RATE_LIMIT_WINDOW_SECONDS,
+      env.WS_CONNECT_RATE_LIMIT_MAX,
+    )
+      .then((result) => {
+        if (!result.allowed) {
+          next(new Error('RATE_LIMITED'));
+          return;
+        }
+        socket.data = { id: payload.sub, role: payload.role } satisfies SocketUser;
+        next();
+      })
+      .catch(() => {
+        next(new Error('INTERNAL_ERROR'));
+      });
   });
 
   io.on('connection', (socket: Socket) => {
@@ -84,6 +110,10 @@ export function registerChatGateway(io: Server): void {
         });
     });
 
+    // An authenticated socket could otherwise write to the messages table as
+    // fast as it can emit. The connection limit above only bounds how often
+    // a user *connects*, not what they do once connected, so message sending
+    // needs its own bucket.
     socket.on('send_message', (raw: unknown, ack: Ack) => {
       const parsed = sendMessagePayloadSchema.safeParse(raw);
       if (!parsed.success) {
@@ -91,9 +121,23 @@ export function registerChatGateway(io: Server): void {
         return;
       }
 
-      conversationService
-        .sendMessage(user.id, parsed.data.conversationId, parsed.data.message)
-        .then((message) => {
+      consumeRateLimit(
+        'ws-message-user',
+        user.id,
+        env.WS_MESSAGE_RATE_LIMIT_WINDOW_SECONDS,
+        env.WS_MESSAGE_RATE_LIMIT_MAX,
+      )
+        .then(async (result) => {
+          if (!result.allowed) {
+            ack?.({ ok: false, error: 'RATE_LIMITED' });
+            return;
+          }
+
+          const message = await conversationService.sendMessage(
+            user.id,
+            parsed.data.conversationId,
+            parsed.data.message,
+          );
           io.to(roomName(parsed.data.conversationId)).emit('message', message);
           ack?.({ ok: true, data: message });
         })

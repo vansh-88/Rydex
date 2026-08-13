@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
-import { validateQuery } from '../../app/middleware/validate.js';
+import { idParamSchema, validateParams, validateQuery } from '../../app/middleware/validate.js';
 import * as notificationController from './controllers/notificationController.js';
 import { listNotificationsQuerySchema } from './schemas/notificationSchemas.js';
 
@@ -16,4 +16,8 @@ notificationRouter.use(authenticate);
 // (notificationRepository.listByUser/markRead both filter by userId) — no
 // separate authorization rule needed, same reasoning as GET /users/me.
 notificationRouter.get('/', validateQuery(listNotificationsQuerySchema), notificationController.list);
-notificationRouter.patch('/:id/read', notificationController.markRead);
+notificationRouter.patch(
+  '/:id/read',
+  validateParams(idParamSchema),
+  notificationController.markRead,
+);

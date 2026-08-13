@@ -1,7 +1,12 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
-import { validateBody, validateQuery } from '../../app/middleware/validate.js';
+import {
+  idParamSchema,
+  validateBody,
+  validateParams,
+  validateQuery,
+} from '../../app/middleware/validate.js';
 import { env } from '../../config/env.js';
 import { rateLimit } from '../../infrastructure/redis/rateLimit.js';
 import * as supportController from './controllers/supportController.js';
@@ -53,11 +58,13 @@ supportRouter.get(
 );
 supportRouter.get(
   '/conversations/:id',
+  validateParams(idParamSchema),
   validateQuery(getConversationQuerySchema),
   supportController.getConversation,
 );
 supportRouter.post(
   '/conversations/:id/messages',
+  validateParams(idParamSchema),
   validateBody(postMessageSchema),
   perUserShortWindow,
   perUserDaily,

@@ -2421,6 +2421,127 @@ Use Redis so limits work across multiple backend instances.
 
 Test HTTP 429 behavior.
 
+## Status: complete
+
+No new features — this phase audited every route and closed the gaps. Most of
+the checklist above was already satisfied by earlier phases and was re-verified
+rather than rebuilt: Helmet + CORS (Phase 1), input validation (`validateBody`/
+`validateQuery`), webhook signature verification (Phase 10, real HMAC behind
+`PaymentProvider.verifyWebhookSignature`), Cloudinary upload validation (Phase
+4.5, magic-byte check + `authenticated` delivery + signed URLs), and the
+authorization/ownership boundaries built per-module throughout. All confirmed
+working, none changed.
+
+**Rate limiting went from 2 of the 9 categories above to all 9.** Only OTP
+request/verify (Phase 3) and AI support chat (Phase 13.5) had limits; ride
+search, ride creation, booking, payment/webhook, `/auth/refresh`+`/logout`,
+document upload, and WebSocket connections had none. All now use the same
+`rateLimit()` factory (`infrastructure/redis/rateLimit.ts`) — no second
+limiter was introduced — with every limit as its own `*_RATE_LIMIT_*` env var
+(claude.md §49: configurable, never magic numbers). Limits are keyed per user
+where the route is authenticated and per IP where it isn't. The document-upload
+limit is shared by the vehicle and user upload endpoints via
+`app/middleware/rateLimits.ts`, so a user can't get double the allowance by
+alternating between them.
+
+`rateLimit()` itself was hardened three ways: the non-atomic `INCR`+`EXPIRE`
+pair became one Lua script (the old version could strand a counter with no TTL
+— a permanent lockout); `RateLimit-Limit/Remaining/Reset` and `Retry-After`
+are now returned; and a Redis failure now **fails open** (explicit user
+decision this phase — a Redis outage must degrade rate limiting, not take down
+auth/rides/bookings, the same trade-off `createPushProvider()` already makes
+for a bad FCM credential).
+
+Other gaps closed:
+
+-   **`TRUST_PROXY` env boolean, default `false`** (explicit user decision).
+    Every per-IP limit reads `req.ip`, which is only the real client when a
+    trusted proxy sets `X-Forwarded-For`. Default-off is the *safe* value, not
+    a placeholder: with no proxy in front, trusting the header lets any client
+    rotate it and mint a fresh bucket per request. Flip to `true` in the same
+    change that puts the app behind Phase 16's load balancer.
+-   **`validateParams`** added beside the existing two validators, applied to
+    every `:id`/`:userId` route. Every id is a Postgres `@db.Uuid`, so a
+    malformed one previously reached the driver and surfaced as a raw 500
+    (confirmed by reproducing `PrismaClientKnownRequestError` directly).
+-   **`verifyAccessToken` now checks the signed `type: 'access'` claim**,
+    which was previously cast but never verified.
+-   **CORS** tightened from a bare origin string to an explicit
+    origins-list/methods/headers/credentials policy; `CORS_ORIGIN` now accepts
+    a comma-separated list.
+-   **Production-config assertions** in `env.ts`: refuses to boot with
+    `NODE_ENV=production` if a `changeme-` placeholder secret survives, if the
+    access and refresh secrets match, or if `CORS_ORIGIN` is localhost or a
+    wildcard. Development is deliberately unaffected.
+-   **WebSocket** gained a per-user connection limit and a per-message
+    throttle, reusing the same Redis limiter via an exported
+    `consumeRateLimit()` rather than a socket-specific implementation.
+
+## Real bug found during verification
+
+Fail-open did not actually work as first written. ioredis defaults to
+`enableOfflineQueue: true`, which **buffers** commands issued while the
+connection is down and flushes them on reconnect — so a rate-limit check
+against a stopped Redis *hung* rather than throwing, and a `try/catch` cannot
+rescue a hang. Confirmed by stopping the Redis container mid-request: the
+first request returned 200 and every subsequent one blocked indefinitely. A
+Redis outage would therefore have hung every rate-limited endpoint — the exact
+opposite of the intended degradation. Fixed by racing the Redis call against a
+1s deadline inside `consumeRateLimit` and failing open on timeout. Turning the
+offline queue off globally would have been the wrong fix: OTP storage shares
+that connection and should fail *closed*, not quietly proceed.
+
+## Verification
+
+Manual, against the real Postgres/Redis stack (no automated test infra yet, per
+the Phase 3 note — that is Phase 15's job):
+
+-   **429 behavior**: ride search returned exactly 60×200 then 429s at a
+    60/min limit; OTP resend cooldown returned 429 with `Retry-After: 60`;
+    `RateLimit-Reset` tracked the real key TTL. Every counter key was
+    confirmed to carry a TTL (the atomicity fix).
+-   **`TRUST_PROXY` in both positions**, without needing a load balancer:
+    with `false`, 65 requests each carrying a *different* spoofed
+    `X-Forwarded-For` correctly shared one bucket (60×401 then 5×429) —
+    spoofing defeated; with `true`, the same 65 requests got 65 separate
+    buckets (zero 429s) — header honored, ready for the ALB.
+-   **Fail-open**: with Redis stopped, rate-limited endpoints returned 200 in
+    ~1.0s (the deadline) instead of hanging or 500ing, logged the degradation,
+    and returned to normal enforcement (60×200, 3×429) after recovery.
+-   **Param validation**: `/rides/not-a-uuid`, `/bookings/12345`,
+    `/vehicles/abc` all → 400 `VALIDATION_ERROR` (previously 500); a
+    well-formed but nonexistent uuid still → 404 `RIDE_NOT_FOUND`.
+-   **Token type**: a JWT signed with the *access* secret carrying
+    `type: 'refresh'` → 401; one with **no** `type` claim and `role: ADMIN` →
+    401 (previously would have been accepted as a valid admin token); a
+    genuine access token → 200.
+-   **Middleware ordering**: no token → 401; a `PASSENGER` on an admin route
+    with a malformed uuid → 403 (authorization runs before validation, so
+    nothing is leaked), and a forbidden request does not consume the caller's
+    rate-limit budget.
+-   **Production assertions**: placeholder secrets → refuses to boot, exit 1;
+    identical access/refresh secrets → refused; localhost `CORS_ORIGIN` →
+    refused; a fully valid production config → boots.
+-   **Re-verified unchanged**: bad webhook signature → 401
+    `INVALID_WEBHOOK_SIGNATURE` and a correctly-signed one still reaches the
+    handler (404 `PAYMENT_NOT_FOUND` for an unknown order); a text file named
+    `.png` → `UNSUPPORTED_FILE_TYPE`; the shared upload bucket decremented
+    across *both* upload endpoints (20 → 18 → 17).
+-   **WebSocket**: 35 connection attempts at a 30/min limit → 30 connected,
+    5 rejected `RATE_LIMITED`; 65 `send_message` events at a 60/min limit →
+    60 reached the authorization layer (correctly rejected
+    `CONVERSATION_NOT_FOUND`, ownership boundary intact) and 5 were
+    `RATE_LIMITED`.
+-   **Helmet/CORS headers** confirmed present on responses; a disallowed
+    origin receives no `Access-Control-Allow-Origin`; preflight advertises
+    only `GET,POST,PATCH` (the verbs that actually exist).
+
+`npm run typecheck`, `npm run lint`, and `npm run build` all pass.
+
+Not done in this phase, deliberately: automated tests and failure-injection
+(Phase 15), Dockerfile/non-root/secrets manager/TLS (Phase 16), structured
+logging and OpenAPI (Phase 15/17). No schema migration was needed.
+
 ------------------------------------------------------------------------
 
 # 19. Phase 15 --- Testing + Hardening
@@ -2630,7 +2751,7 @@ Claude must maintain this checklist.
 [x] Phase 12 — Notifications
 [x] Phase 13 — Chat
 [x] Phase 13.5 — AI Support Chatbot
-[ ] Phase 14 — Security
+[x] Phase 14 — Security
 [ ] Phase 15 — Testing + Hardening
 [ ] Phase 16 — Production Deployment Preparation
 [ ] Phase 17 — Final Integration

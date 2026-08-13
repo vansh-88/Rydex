@@ -26,11 +26,30 @@ export function signAccessToken(userId: string, role: UserRole): string {
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
+  let payload: unknown;
+
   try {
-    return jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload;
+    payload = jwt.verify(token, env.JWT_ACCESS_SECRET);
   } catch {
     throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired access token');
   }
+
+  // The `type: 'access'` claim is signed but was never checked — the cast
+  // alone asserted a shape TypeScript can't verify at runtime. Nothing else
+  // is currently signed with JWT_ACCESS_SECRET (refresh tokens are random
+  // hex, not JWTs), so this isn't exploitable today; it's checked so the
+  // invariant holds by construction rather than by that happening to stay
+  // true if a second token type is ever signed with the same secret.
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    (payload as { type?: unknown }).type !== 'access' ||
+    typeof (payload as { sub?: unknown }).sub !== 'string'
+  ) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired access token');
+  }
+
+  return payload as AccessTokenPayload;
 }
 
 function hashRefreshToken(token: string): string {

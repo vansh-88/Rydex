@@ -3,7 +3,8 @@ import { Router } from 'express';
 import { authenticate } from '../../app/middleware/authenticate.js';
 import { authorize } from '../../app/middleware/authorize.js';
 import { uploadDocument, validateDocumentFile } from '../../app/middleware/uploadDocument.js';
-import { validateBody } from '../../app/middleware/validate.js';
+import { idParamSchema, validateBody, validateParams } from '../../app/middleware/validate.js';
+import { documentUploadLimit } from '../../app/middleware/rateLimits.js';
 import * as vehicleController from './controllers/vehicleController.js';
 import {
   createVehicleSchema,
@@ -22,12 +23,21 @@ vehicleRouter.post('/', authorize('DRIVER'), validateBody(createVehicleSchema), 
 
 vehicleRouter.get('/', vehicleController.list);
 
-vehicleRouter.get('/:id', vehicleController.getById);
+vehicleRouter.get('/:id', validateParams(idParamSchema), vehicleController.getById);
 
-vehicleRouter.patch('/:id', validateBody(updateVehicleSchema), vehicleController.update);
+vehicleRouter.patch(
+  '/:id',
+  validateParams(idParamSchema),
+  validateBody(updateVehicleSchema),
+  vehicleController.update,
+);
 
+// Rate limit runs before multer so a flood of oversized uploads is rejected
+// before their bodies are buffered into memory.
 vehicleRouter.post(
   '/:id/documents',
+  documentUploadLimit,
+  validateParams(idParamSchema),
   uploadDocument,
   validateBody(uploadVehicleDocumentSchema),
   validateDocumentFile,

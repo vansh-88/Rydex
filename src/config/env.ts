@@ -1,10 +1,27 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+// A security flag must never be misread. `z.coerce.boolean()` would turn
+// "false"/"0"/"no" into `true` (any non-empty string is truthy), so this
+// accepts the two literal spellings and rejects anything else loudly at
+// startup rather than silently defaulting to the unsafe interpretation.
+const envBoolean = z.enum(['true', 'false']).transform((value) => value === 'true');
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
+  // Comma-separated list — a production deployment usually has more than one
+  // legitimate browser origin (app domain, admin dashboard).
   CORS_ORIGIN: z.string().min(1).default('http://localhost:3000'),
+
+  // claude.md §49/§65: whether to trust X-Forwarded-For when resolving
+  // req.ip, which every per-IP rate limit depends on. This is deliberately
+  // NOT "on by default": with no proxy in front, trusting the header lets
+  // any client spoof it and mint a fresh rate-limit bucket per request,
+  // defeating the OTP brute-force protection entirely. Turn it on only once
+  // a load balancer that overwrites the header actually terminates traffic
+  // (Phase 16's ALB) — until then, false is the correct and safer value.
+  TRUST_PROXY: envBoolean.default(false),
 
   // Consumed starting Phase 2 (Prisma/Postgres connection).
   DATABASE_URL: z.string().min(1),
@@ -29,6 +46,48 @@ const envSchema = z.object({
   OTP_REQUEST_IP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
   OTP_VERIFY_IP_MAX: z.coerce.number().int().positive().default(20),
   OTP_VERIFY_IP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // --- Phase 14 rate limits (claude.md §49/§50, steps.md §18) -------------
+  // Deliberately kept in one block with the OTP limits above so the whole
+  // rate-limiting posture can be reviewed in a single place. Limits are
+  // per-user unless the name says IP (an unauthenticated endpoint has no
+  // user to key on). §50: expensive operations get the stricter limits.
+
+  // Token grinding — a well-behaved client refreshes ~4x/hour per device.
+  AUTH_REFRESH_IP_MAX: z.coerce.number().int().positive().default(60),
+  AUTH_REFRESH_IP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // A PostGIS spatial query per call. Generous enough for interactive
+  // searching (re-sorting, paging through results), tight enough to stop
+  // someone scraping the whole ride inventory.
+  RIDE_SEARCH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
+  RIDE_SEARCH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+
+  // The most expensive endpoint in the app: a Geoapify routing call AND a
+  // Razorpay order per request, both metered/billed externally.
+  RIDE_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  RIDE_CREATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // Seat-hold spam: each booking reserves a real seat for
+  // BOOKING_PAYMENT_TTL_SECONDS whether or not payment ever follows.
+  BOOKING_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+  BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // Cloudinary storage/bandwidth cost per upload.
+  DOCUMENT_UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+  DOCUMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // Unauthenticated and public, so keyed per IP. Set high: this is a DoS
+  // ceiling only, never something a legitimate Razorpay retry burst should
+  // hit — dropping a real payment webhook is far worse than absorbing it.
+  WEBHOOK_IP_MAX: z.coerce.number().int().positive().default(1000),
+  WEBHOOK_IP_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+
+  // claude.md §49 lists WebSocket connections as its own category.
+  WS_CONNECT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  WS_CONNECT_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  WS_MESSAGE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
+  WS_MESSAGE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
 
   // Consumed starting Phase 4.5/5 (Cloudinary document uploads).
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
@@ -131,6 +190,52 @@ const envSchema = z.object({
   SUPPORT_CHAT_DAILY_MESSAGE_LIMIT: z.coerce.number().int().positive().default(50),
 });
 
+// claude.md §63/§68: "never commit secrets" is only half the problem — the
+// other half is deploying with the .env.example placeholders still in place.
+// Schema validation can't catch that (the placeholders are well-formed and
+// long enough), so these are checked separately and only in production, where
+// they are genuinely fatal. Development is deliberately left alone: local dev
+// is *supposed* to run with changeme-secrets and a localhost origin.
+function assertProductionSecrets(config: z.infer<typeof envSchema>): void {
+  if (config.NODE_ENV !== 'production') {
+    return;
+  }
+
+  const problems: string[] = [];
+
+  const placeholderSecrets = [
+    ['JWT_ACCESS_SECRET', config.JWT_ACCESS_SECRET],
+    ['JWT_REFRESH_SECRET', config.JWT_REFRESH_SECRET],
+    ['PAYMENT_PROVIDER_WEBHOOK_SECRET', config.PAYMENT_PROVIDER_WEBHOOK_SECRET],
+  ] as const;
+
+  for (const [name, value] of placeholderSecrets) {
+    if (value.toLowerCase().includes('changeme')) {
+      problems.push(`${name} still contains the .env.example placeholder value`);
+    }
+  }
+
+  if (config.JWT_ACCESS_SECRET === config.JWT_REFRESH_SECRET) {
+    problems.push('JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different');
+  }
+
+  if (config.CORS_ORIGIN.includes('localhost') || config.CORS_ORIGIN.includes('127.0.0.1')) {
+    problems.push('CORS_ORIGIN must not point at localhost in production');
+  }
+
+  if (config.CORS_ORIGIN.includes('*')) {
+    problems.push('CORS_ORIGIN must not be a wildcard in production');
+  }
+
+  if (problems.length > 0) {
+    console.error('Refusing to start in production with an insecure configuration:');
+    for (const problem of problems) {
+      console.error(`  - ${problem}`);
+    }
+    process.exit(1);
+  }
+}
+
 function loadEnv(): z.infer<typeof envSchema> {
   const parsed = envSchema.safeParse(process.env);
 
@@ -139,8 +244,16 @@ function loadEnv(): z.infer<typeof envSchema> {
     process.exit(1);
   }
 
+  assertProductionSecrets(parsed.data);
+
   return parsed.data;
 }
 
 export const env = loadEnv();
+
+// CORS_ORIGIN is authored as a comma-separated list; parsed once here rather
+// than on every request.
+export const corsOrigins: string[] = env.CORS_ORIGIN.split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
 export type Env = typeof env;

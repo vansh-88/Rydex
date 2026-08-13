@@ -2645,6 +2645,25 @@ PLATFORM_COMMISSION_PERCENT
 DRIVER_EARLY_CANCEL_REFUND_PERCENT
 DRIVER_CANCEL_THRESHOLD_HOURS
 
+TRUST_PROXY
+
+AUTH_REFRESH_IP_MAX
+AUTH_REFRESH_IP_WINDOW_SECONDS
+RIDE_SEARCH_RATE_LIMIT_MAX
+RIDE_SEARCH_RATE_LIMIT_WINDOW_SECONDS
+RIDE_CREATE_RATE_LIMIT_MAX
+RIDE_CREATE_RATE_LIMIT_WINDOW_SECONDS
+BOOKING_CREATE_RATE_LIMIT_MAX
+BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS
+DOCUMENT_UPLOAD_RATE_LIMIT_MAX
+DOCUMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS
+WEBHOOK_IP_MAX
+WEBHOOK_IP_WINDOW_SECONDS
+WS_CONNECT_RATE_LIMIT_MAX
+WS_CONNECT_RATE_LIMIT_WINDOW_SECONDS
+WS_MESSAGE_RATE_LIMIT_MAX
+WS_MESSAGE_RATE_LIMIT_WINDOW_SECONDS
+
 AI_PROVIDER
 GEMINI_API_KEY
 GEMINI_MODEL
@@ -4456,3 +4475,70 @@ Record of intentional decisions made after the initial draft, per §91.
     JSON arrays), and `AI_PROVIDER_RATE_LIMITED` being specified in §55
     but never actually mapped from an upstream 429. See steps.md
     Phase 13.5 "Status: complete" for the full detail.
+
+### 2026-08-13 (Phase 14 — Security + Rate Limiting)
+
+*Dated from the actual commit date. The `2026-08-15`/`2026-08-16` headings
+above run ahead of theirs; this entry follows Phase 13.5 in sequence
+regardless of the drift.*
+
+-   **Rate limiting extended from 2 of §49's categories to all of them.**
+    Only OTP request/verify (§9) and AI support chat (§96.5) had limits;
+    ride search, ride creation, booking, payment/webhook, `/auth/refresh`,
+    document upload, and WebSocket connections had none — not by decision,
+    just because no phase's scope forced the question. All now use the
+    existing `rateLimit()` factory with per-category `*_RATE_LIMIT_*` env
+    vars (§49 "use configurable values"); no second limiter was introduced.
+    Keyed per user on authenticated routes, per IP otherwise.
+-   **`rateLimit()` fails open on Redis failure — explicit product decision
+    made when asked directly.** A Redis outage must degrade rate limiting,
+    never take down auth/rides/bookings with it. This is the same
+    availability-over-strictness trade-off `createPushProvider()` already
+    makes for a bad FCM credential (§97, 2026-08-15). The accepted exposure
+    is that brute-force protection is absent, not merely weakened, while
+    Redis is down; every fail-open is logged so the window is visible rather
+    than silent.
+-   **`TRUST_PROXY` added as a config boolean, default `false` — explicit
+    product decision.** Every per-IP limit reads `req.ip`, which is only the
+    real client when a trusted proxy sets `X-Forwarded-For`. Default-off is
+    the *correct* value today, not a placeholder: with no proxy in front,
+    trusting the header lets any client rotate it and mint a fresh
+    rate-limit bucket per request, defeating §9's OTP brute-force protection
+    entirely. Both positions were verified without needing a real load
+    balancer (see steps.md Phase 14). Flip to `true` in the same change that
+    introduces §65's ALB.
+-   **`INCR`+`EXPIRE` replaced by one Lua script.** The two-command version
+    (flagged in its own comment since Phase 3) could leave a counter with no
+    TTL if the process died between them — a permanent lockout for whoever
+    owned that key. `Retry-After` and `RateLimit-*` headers added at the same
+    time.
+-   **Real bug found during verification: fail-open didn't actually fail
+    open.** ioredis defaults to `enableOfflineQueue: true`, which buffers
+    commands issued while the connection is down instead of rejecting them,
+    so a rate-limit check against a stopped Redis *hung* — and a `try/catch`
+    cannot rescue a hang. Confirmed by stopping the container mid-request.
+    A Redis outage would have hung every rate-limited endpoint, the exact
+    opposite of the intended degradation. Fixed by racing the call against a
+    1s deadline inside `consumeRateLimit`. Disabling the offline queue
+    globally would have been wrong: OTP storage shares that connection and
+    should fail *closed*.
+-   **`verifyAccessToken` now verifies the signed `type: 'access'` claim**,
+    which §10 specifies but the code only cast, never checked. Not
+    exploitable as written (refresh tokens are random hex, not JWTs), but a
+    token signed with the access secret carrying no `type` and
+    `role: ADMIN` was demonstrably accepted before this change.
+-   **`validateParams` added** alongside `validateBody`/`validateQuery`, and
+    applied to every `:id`/`:userId` route. Every id is a Postgres
+    `@db.Uuid` (§56), so a malformed one reached the driver and surfaced as
+    a raw 500 — §87's "do not expose raw database errors to clients".
+-   **Production-config assertions added to `env.ts`** (§63/§68): refuses to
+    boot under `NODE_ENV=production` with a surviving `changeme-`
+    placeholder secret, with matching access/refresh secrets, or with a
+    localhost/wildcard `CORS_ORIGIN`. Schema validation cannot catch these —
+    the placeholders are well-formed — and development is deliberately left
+    alone.
+-   **No new module, table, migration, or dependency.** Phase 14 is an audit
+    plus applied reuse; the only new file is
+    `app/middleware/rateLimits.ts`, holding the one limit shared by two
+    modules (vehicle and user document upload) so both draw from the same
+    bucket.

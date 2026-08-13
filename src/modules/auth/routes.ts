@@ -37,6 +37,18 @@ const verifyIp = rateLimit({
   keyFn: (req) => req.ip ?? 'unknown',
 });
 
+// steps.md §18 lists "login/auth endpoints" as its own rate-limit category.
+// /refresh and /logout are unauthenticated in the middleware sense — they
+// carry a refresh token in the body, not a bearer token — so there is no
+// req.user to key on and these go per IP. Guards against grinding tokens
+// against the rotation/reuse-detection logic.
+const refreshIp = rateLimit({
+  keyPrefix: 'auth-refresh-ip',
+  windowSeconds: env.AUTH_REFRESH_IP_WINDOW_SECONDS,
+  max: env.AUTH_REFRESH_IP_MAX,
+  keyFn: (req) => req.ip ?? 'unknown',
+});
+
 authRouter.post(
   '/request-otp',
   validateBody(requestOtpSchema),
@@ -47,6 +59,6 @@ authRouter.post(
 
 authRouter.post('/verify-otp', validateBody(verifyOtpSchema), verifyIp, authController.verifyOtp);
 
-authRouter.post('/refresh', validateBody(refreshSchema), authController.refresh);
+authRouter.post('/refresh', refreshIp, validateBody(refreshSchema), authController.refresh);
 
-authRouter.post('/logout', validateBody(logoutSchema), authController.logout);
+authRouter.post('/logout', refreshIp, validateBody(logoutSchema), authController.logout);

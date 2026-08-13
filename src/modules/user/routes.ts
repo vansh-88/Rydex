@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
+import { documentUploadLimit } from '../../app/middleware/rateLimits.js';
 import { uploadDocument, validateDocumentFile } from '../../app/middleware/uploadDocument.js';
 import { validateBody } from '../../app/middleware/validate.js';
 import * as deviceController from '../notification/controllers/deviceController.js';
@@ -23,6 +24,7 @@ userRouter.patch(
 userRouter.post(
   '/me/driver-application',
   authenticate,
+  documentUploadLimit,
   uploadDocument,
   validateDocumentFile,
   driverApplicationController.submit,

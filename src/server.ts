@@ -4,7 +4,7 @@ import { createApp } from './app/app.js';
 import { env } from './config/env.js';
 import { prisma } from './infrastructure/database/prismaClient.js';
 import { bookingExpiryWorker } from './infrastructure/queue/bookingExpiryWorker.js';
-import { queueConnection } from './infrastructure/queue/connection.js';
+import { closeQueueConnections } from './infrastructure/queue/connection.js';
 import { notificationWorker } from './infrastructure/queue/notificationWorker.js';
 import { bookingExpiryQueue, notificationQueue, refundQueue } from './infrastructure/queue/queues.js';
 import { refundWorker } from './infrastructure/queue/refundWorker.js';
@@ -52,8 +52,9 @@ async function closeResources(): Promise<void> {
   await io.close();
   // Previously nothing disconnected these: the pool and both Redis clients
   // were left for process exit to reap, which drops connections mid-flight
-  // rather than draining them.
-  await Promise.all([prisma.$disconnect(), redis.quit(), queueConnection.quit()]);
+  // rather than draining them. closeQueueConnections() covers the shared queue
+  // connection *and* each Worker's dedicated one.
+  await Promise.all([prisma.$disconnect(), redis.quit(), closeQueueConnections()]);
 }
 
 function shutdown(signal: string): void {

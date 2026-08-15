@@ -4708,3 +4708,47 @@ regardless of the drift.*
     a stolen one, and treating that presentation as suspicious is the correct
     security posture. Softening the code would weaken a real control to improve
     a message.
+
+### 2026-08-18 (BullMQ workers stalled permanently after a Redis outage)
+
+-   **Every Worker now gets its own Redis connection; only the Queues share
+    one.** All three Workers and all three Queues previously ran on a single
+    `queueConnection`. A Worker sits in a blocking `BZPOPMIN`/`BRPOPLPUSH`
+    waiting for its next job, and a blocking command monopolises the socket it
+    was issued on, so several Workers on one connection contend for it. That
+    works while the connection stays healthy — which is why it survived every
+    earlier phase — but once an outage drops the socket, at least one Worker's
+    blocking loop never resumes after the reconnect.
+-   **The failure was silent and permanent.** The stalled Worker reported
+    `isRunning() === true`, emitted no error, and its `failed` handler never
+    fired; jobs simply accumulated in `wait` with `active=0` until the process
+    was restarted. Consequences: seat-hold expiry never fires (so seats are
+    held forever against bookings that never paid — §35/§36), refunds are never
+    submitted (§11), and no notification is ever delivered.
+-   **Found during the second verification pass, and initially misattributed.**
+    It was first recorded as pre-existing on the grounds that
+    `queue/connection.ts` was untouched by the preceding bug-fix commits. That
+    reasoning was right about the file and wrong about the cause: the defect is
+    in how Workers were *given* that connection, which predates those commits
+    but was never exercised because no earlier phase had induced a Redis outage
+    while queues were idle.
+-   **Reproduced in isolation before changing anything**, outside the app: one
+    shared connection + three Workers + a 25s outage with the queues idle left
+    exactly one queue at `wait=1`/`active=0` permanently, while the other two
+    recovered. A single Worker on a shared connection recovered fine, and a 3s
+    bounce recovered fine — which is why the bug looked intermittent and
+    duration-dependent rather than structural.
+-   **Verified after the fix** against the same scenario at 25s and again at
+    45s: all three queues drained and the notification actually persisted,
+    **without restarting the process**. Normal (no-outage) throughput and
+    SIGTERM shutdown were re-checked and unchanged.
+-   `createQueueConnection(label)` also attaches an `error` listener to each
+    queue connection. Those were previously the clients ioredis complained
+    about with `missing 'error' handler on this Redis client` during an outage;
+    an ioredis 'error' with no listener is an unhandled 'error' event.
+    `closeQueueConnections()` closes the whole pool on shutdown, replacing the
+    single `queueConnection.quit()`, and falls back to `disconnect()` when
+    `quit()` can't complete because the server is already gone.
+-   **Not addressed here:** the two `redis.duplicate()` clients backing the
+    Socket.IO adapter (`infrastructure/socket/socketServer.ts`) still have no
+    `error` listener.

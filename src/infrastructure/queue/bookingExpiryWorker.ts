@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 
 import { processBookingExpiry } from '../../modules/booking/services/bookingExpiryService.js';
 import type { BookingExpiryJobData } from '../../modules/booking/services/bookingExpiryService.js';
-import { queueConnection } from './connection.js';
+import { createQueueConnection } from './connection.js';
 import { BOOKING_EXPIRY_QUEUE_NAME } from './queues.js';
 
 export const bookingExpiryWorker = new Worker<BookingExpiryJobData>(
@@ -10,7 +10,9 @@ export const bookingExpiryWorker = new Worker<BookingExpiryJobData>(
   async (job) => {
     await processBookingExpiry(job.data.bookingId);
   },
-  { connection: queueConnection },
+  // Dedicated connection: a Worker's blocking commands must not share a
+  // socket with other Workers (see connection.ts).
+  { connection: createQueueConnection('booking-expiry-worker') },
 );
 
 bookingExpiryWorker.on('failed', (job, err) => {

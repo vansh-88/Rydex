@@ -4749,6 +4749,15 @@ regardless of the drift.*
     `closeQueueConnections()` closes the whole pool on shutdown, replacing the
     single `queueConnection.quit()`, and falls back to `disconnect()` when
     `quit()` can't complete because the server is already gone.
--   **Not addressed here:** the two `redis.duplicate()` clients backing the
-    Socket.IO adapter (`infrastructure/socket/socketServer.ts`) still have no
-    `error` listener.
+-   **The Socket.IO adapter's two `redis.duplicate()` clients were the same
+    defect and are fixed alongside it.** They now have `error` listeners, and
+    `closeSocketRedisClients()` closes them during shutdown — the adapter did
+    not create those connections, so `io.close()` left them open. They are
+    closed *after* `io.close()`, since the adapter still publishes on them
+    while sockets are being torn down. `commandTimeout` inherited from the
+    parent client is deliberately left in place: SUBSCRIBE/PUBLISH are ordinary
+    request/response commands, and delivered pub/sub messages are pushes rather
+    than command replies, so the deadline never applies to waiting for a
+    message. Verified: `missing 'error' handler on this Redis client` no longer
+    appears during an outage, and a full chat round trip (join -> send ->
+    broadcast -> persisted) still works afterwards without a restart.

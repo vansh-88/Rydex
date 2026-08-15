@@ -9,7 +9,7 @@ import { notificationWorker } from './infrastructure/queue/notificationWorker.js
 import { bookingExpiryQueue, notificationQueue, refundQueue } from './infrastructure/queue/queues.js';
 import { refundWorker } from './infrastructure/queue/refundWorker.js';
 import { redis } from './infrastructure/redis/redisClient.js';
-import { createSocketServer } from './infrastructure/socket/socketServer.js';
+import { closeSocketRedisClients, createSocketServer } from './infrastructure/socket/socketServer.js';
 import { registerChatGateway } from './modules/chat/socket/chatGateway.js';
 
 const app = createApp();
@@ -54,6 +54,9 @@ async function closeResources(): Promise<void> {
   // were left for process exit to reap, which drops connections mid-flight
   // rather than draining them. closeQueueConnections() covers the shared queue
   // connection *and* each Worker's dedicated one.
+  // Socket.IO's adapter clients are closed after io.close() above, since the
+  // adapter publishes on them while sockets are still being torn down.
+  await closeSocketRedisClients();
   await Promise.all([prisma.$disconnect(), redis.quit(), closeQueueConnections()]);
 }
 

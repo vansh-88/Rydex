@@ -22,6 +22,21 @@ function createPushProvider(): PushProvider {
     env.FCM_PRIVATE_KEY !== undefined &&
     env.FCM_PRIVATE_KEY.length > 0
   ) {
+    // firebase-admin authenticates as a *service account*, so this must be a
+    // `…@….iam.gserviceaccount.com` address. A personal Google account here
+    // parses fine, constructs fine, and then fails every single send with
+    // `app/invalid-credential` / `invalid_grant: account not found`. That
+    // exact misconfiguration shipped once and broke push delivery entirely,
+    // so it is caught here at boot instead of silently at runtime.
+    if (!env.FCM_CLIENT_EMAIL.endsWith('.iam.gserviceaccount.com')) {
+      console.error(
+        `FCM_CLIENT_EMAIL ("${env.FCM_CLIENT_EMAIL}") is not a service account address — it must end in .iam.gserviceaccount.com. ` +
+          'Download a key from Firebase Console -> Project settings -> Service accounts -> Generate new private key and use that file\'s client_email. ' +
+          'Falling back to ConsolePushProvider; no real push notifications will be sent.',
+      );
+      return new ConsolePushProvider();
+    }
+
     try {
       return new FirebasePushProvider(env.FCM_PROJECT_ID, env.FCM_CLIENT_EMAIL, env.FCM_PRIVATE_KEY);
     } catch (err) {

@@ -143,11 +143,23 @@ export async function notifyRefundProcessed(userId: string, amount: number): Pro
   });
 }
 
+// A device token can be used to push to that device, so it is never logged
+// in full (claude.md §61) — a short prefix is enough to correlate a repeated
+// failure against one device.
+function tokenHint(token: string): string {
+  return `${token.slice(0, 8)}…(${token.length})`;
+}
+
 // claude.md §46: persistence and FCM delivery are separate concerns. The
-// upsert makes persistence idempotent; the send() call is left to throw on
-// a genuine gateway failure so BullMQ retries the whole job (the retry's
-// persistence step is then a no-op, per the upsert above) rather than
-// silently swallowing a transient FCM outage.
+// upsert makes persistence idempotent, so a retry re-runs it harmlessly.
+//
+// Delivery outcomes were previously discarded unless FCM named the token dead:
+// every other failure — including `app/invalid-credential`, i.e. a completely
+// broken service account — was dropped with no log, no retry, and a job that
+// reported success. Push delivery could be 0% functional and nothing anywhere
+// said so (confirmed in practice: an invalid credential failed 100% of sends
+// silently). Failures are now always logged, and retriable ones throw so
+// BullMQ's bounded backoff (attempts: 5) gets a chance at them.
 export async function processNotificationJob(job: NotificationJobData): Promise<void> {
   await notificationRepository.upsert({
     id: job.id,
@@ -173,6 +185,28 @@ export async function processNotificationJob(job: NotificationJobData): Promise<
   const invalidTokens = results.filter((r) => r.invalidToken).map((r) => r.token);
   if (invalidTokens.length > 0) {
     await userDeviceRepository.removeTokens(invalidTokens);
+  }
+
+  const failures = results.filter((r) => !r.success);
+  if (failures.length === 0) {
+    return;
+  }
+
+  console.error(
+    `push delivery failed: notificationId=${job.id} type=${job.type} userId=${job.userId} ` +
+      `failed=${failures.length}/${results.length} removedTokens=${invalidTokens.length} ` +
+      `failures=[${failures.map((f) => `${tokenHint(f.token)}:${f.errorCode ?? 'unknown'}`).join(', ')}]`,
+  );
+
+  // Throwing after the token cleanup above means the retry sees a shorter
+  // token list rather than re-failing on tokens already known to be dead.
+  const retriable = failures.filter((f) => f.retriable);
+  if (retriable.length > 0) {
+    throw new AppError(
+      502,
+      'PUSH_DELIVERY_FAILED',
+      `Push delivery failed for ${retriable.length} of ${results.length} device(s)`,
+    );
   }
 }
 

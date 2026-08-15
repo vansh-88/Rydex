@@ -7,6 +7,8 @@ import type { PushNotificationPayload, PushProvider, PushSendResult } from './pu
 export class ConsolePushProvider implements PushProvider {
   send(tokens: string[], payload: PushNotificationPayload): Promise<PushSendResult[]> {
     console.log(`[dev push fallback] "${payload.title}" — ${payload.body} -> [${tokens.join(', ')}]`);
-    return Promise.resolve(tokens.map((token) => ({ token, success: true, invalidToken: false })));
+    return Promise.resolve(
+      tokens.map((token) => ({ token, success: true, invalidToken: false, retriable: false })),
+    );
   }
 }

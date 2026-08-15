@@ -4591,3 +4591,44 @@ regardless of the drift.*
     they warn loudly instead of blocking a deploy. `TRUST_PROXY=false` in
     production is now fatal too — every per-IP limit silently collapses onto the
     load balancer's address without it (§49).
+
+### 2026-08-17 (Push delivery: failures made visible)
+
+-   **Root cause of the "FCM is configured but nothing is delivered" bug was a
+    misconfiguration, but the real defect was that it was invisible.**
+    `FCM_CLIENT_EMAIL` held a personal Google address rather than a service
+    account, so Google answered every token exchange with
+    `invalid_grant: account not found` and firebase-admin surfaced
+    `app/invalid-credential`. Push delivery was 0% functional and nothing —
+    no log line, no failed job, no metric — said so.
+-   **`processNotificationJob` discarded every delivery outcome except the two
+    "token is dead" codes.** `PushSendResult.success === false` was dropped on
+    the floor, so the job completed successfully having delivered nothing. It
+    now always logs a failure summary (notification id, type, user, failure
+    count, per-token error codes) and throws for retriable failures so BullMQ's
+    existing bounded backoff (`attempts: 5`) applies. Device tokens are logged
+    as a truncated prefix only — a token can be used to push to that device
+    (§61).
+-   **`PushSendResult` gained `retriable` and `errorCode`.** The original
+    interface comment assumed gateway-level failures would throw and only
+    per-token failures would resolve; that assumption was wrong, and was
+    precisely what let a broken credential masquerade as routine stale-token
+    noise. Classifying vendor error codes stays inside the provider, where the
+    vendor vocabulary belongs — the same reasoning that put
+    `verifyWebhookSignature` behind `PaymentProvider` (§37).
+    `messaging/invalid-argument` is deliberately in neither the invalid-token
+    nor the retriable set: FCM returns it both for a malformed token and for a
+    malformed payload, so treating it as a dead token would wipe every user's
+    devices on a payload bug, and retrying it would never succeed. It is logged
+    instead.
+-   **`createPushProvider()` now rejects a non-service-account
+    `FCM_CLIENT_EMAIL` at boot**, falling back to `ConsolePushProvider` with an
+    actionable message rather than constructing a provider that is guaranteed
+    to fail on every send. One `.endsWith('.iam.gserviceaccount.com')` check
+    would have turned this bug into a startup error.
+-   Verified end-to-end against the real FCM API in all three states: a valid
+    service account authenticates and reaches the gateway; a junk token logs
+    `messaging/invalid-argument` and is correctly neither removed nor retried;
+    a non-existent service account logs `app/invalid-credential` and is retried
+    by BullMQ. Notification rows persist in every case, so the in-app
+    notification centre is unaffected by delivery failure (§46).

@@ -7,6 +7,15 @@ import { z } from 'zod';
 // startup rather than silently defaulting to the unsafe interpretation.
 const envBoolean = z.enum(['true', 'false']).transform((value) => value === 'true');
 
+// `.env.example` ships optional provider vars present-but-blank, and a blank
+// var means "not configured" (fall back to the console/stub provider), not
+// "configured with an invalid value". Without this, `FOO=` would fail a format
+// check and take the whole process down at boot instead of falling back.
+const optionalEmail = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.email().optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -31,10 +40,16 @@ const envSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
 
-  // Resend stays optional even in Phase 3: without a key, auth falls back
-  // to a console email provider for local dev (see infrastructure/resend).
-  RESEND_API_KEY: z.string().optional(),
-  RESEND_FROM_EMAIL: z.string().optional(),
+  // Brevo stays optional for local dev: without a key, auth falls back to a
+  // console email provider (see infrastructure/email). assertProductionSecrets()
+  // refuses that fallback when NODE_ENV=production.
+  // Must be an "API key" (xkeysib-…), not an SMTP key (xsmtpsib-…) — the latter
+  // only works against Brevo's SMTP relay and the REST API rejects it with 401.
+  BREVO_API_KEY: z.string().optional(),
+  // Must be a sender verified in Brevo (Senders, Domains & Dedicated IPs),
+  // otherwise every send is rejected at the API.
+  BREVO_FROM_EMAIL: optionalEmail,
+  BREVO_FROM_NAME: z.string().min(1).default('Rydex'),
 
   // claude.md §9: OTP TTL/attempts/cooldown must be configurable.
   OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
@@ -225,6 +240,45 @@ function assertProductionSecrets(config: z.infer<typeof envSchema>): void {
 
   if (config.CORS_ORIGIN.includes('*')) {
     problems.push('CORS_ORIGIN must not be a wildcard in production');
+  }
+
+  if (!config.TRUST_PROXY) {
+    // Every per-IP rate limit reads req.ip, which is the load balancer's
+    // address unless X-Forwarded-For is trusted — so all callers share one
+    // bucket and per-IP limiting silently stops working (claude.md §49).
+    problems.push(
+      'TRUST_PROXY must be true in production (the app runs behind a load balancer; per-IP rate limits are meaningless otherwise)',
+    );
+  }
+
+  // Provider credentials are optional in the schema so local dev can run
+  // without accounts, and each factory falls back to a console/stub provider.
+  // Two of those fallbacks are actively unsafe in production rather than merely
+  // degraded, so they are fatal here:
+  //   - no Brevo key  -> OTPs are printed to stdout. Login is broken AND every
+  //                      login credential is disclosed to the logs (§61).
+  //   - no Razorpay   -> StubPaymentProvider mints fake order ids, so the app
+  //                      takes real bookings through a gateway that moves no
+  //                      money (§37).
+  // FCM and Gemini fall back to feature degradation, not unsafety, so they warn
+  // loudly at boot instead of blocking the deploy (see createPushProvider /
+  // createAIProvider).
+  if (config.BREVO_API_KEY === undefined || config.BREVO_API_KEY.length === 0) {
+    problems.push('BREVO_API_KEY is required in production (otherwise OTPs are logged, not emailed)');
+  }
+
+  if (config.BREVO_FROM_EMAIL === undefined || config.BREVO_FROM_EMAIL.length === 0) {
+    problems.push('BREVO_FROM_EMAIL is required in production');
+  }
+
+  if (config.PAYMENT_PROVIDER_KEY === undefined || config.PAYMENT_PROVIDER_KEY.length === 0) {
+    problems.push(
+      'PAYMENT_PROVIDER_KEY is required in production (otherwise the stub payment provider is used and no real payments are taken)',
+    );
+  }
+
+  if (config.PAYMENT_PROVIDER_SECRET === undefined || config.PAYMENT_PROVIDER_SECRET.length === 0) {
+    problems.push('PAYMENT_PROVIDER_SECRET is required in production');
   }
 
   if (problems.length > 0) {

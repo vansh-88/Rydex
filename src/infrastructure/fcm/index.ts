@@ -3,7 +3,7 @@ import { ConsolePushProvider } from './consolePushProvider.js';
 import { FirebasePushProvider } from './firebasePushProvider.js';
 import type { PushProvider } from './pushProvider.js';
 
-// Mirrors infrastructure/resend/index.ts and infrastructure/payments/index.ts's
+// Mirrors infrastructure/email/index.ts and infrastructure/payments/index.ts's
 // real-vs-console-fallback pattern, with one addition: unlike Resend/
 // Razorpay's constructors (which just store the key and fail lazily on
 // first real call), firebase-admin's `cert()` synchronously parses the

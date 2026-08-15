@@ -3,7 +3,7 @@ import type { AIProvider } from './aiProvider.js';
 import { ConsoleAIProvider } from './consoleAiProvider.js';
 import { GeminiProvider } from './geminiAiProvider.js';
 
-// Mirrors infrastructure/resend/index.ts and infrastructure/payments/
+// Mirrors infrastructure/email/index.ts and infrastructure/payments/
 // index.ts's real-vs-console-fallback pattern: configured key -> real
 // Gemini, otherwise a console provider that never talks to a real model.
 // claude.md §97 (2026-08-16): originally speced with Grok as the initial

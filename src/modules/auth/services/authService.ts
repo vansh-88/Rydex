@@ -1,5 +1,5 @@
 import { getUniqueConstraintFields } from '../../../infrastructure/database/prismaErrors.js';
-import { emailProvider } from '../../../infrastructure/resend/index.js';
+import { emailProvider } from '../../../infrastructure/email/index.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
 import * as otpService from './otpService.js';

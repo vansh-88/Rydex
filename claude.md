@@ -101,7 +101,7 @@ PostgreSQL + PostGIS
 Redis
 BullMQ
 Cloudinary
-Resend
+Brevo
 FCM
 Map Provider
 Payment Provider
@@ -144,7 +144,7 @@ premature distributed scaling.
 ### Authentication
 
 -   OTP-based authentication
--   Resend for OTP email delivery
+-   Brevo for OTP email delivery
 -   short-lived access token
 -   rotating refresh token
 
@@ -223,7 +223,7 @@ External integrations:
 
 Node Backend
   |
-  +-- Resend
+  +-- Brevo
   +-- FCM
   +-- Cloudinary
   +-- Payment Provider
@@ -543,7 +543,7 @@ Backend
   +-- generate OTP
   +-- hash OTP
   +-- store hash in Redis
-  +-- send via Resend
+  +-- send via Brevo
   |
   v
 Email
@@ -1672,7 +1672,7 @@ genuinely Phase 11 work, tied to policy that doesn't exist yet (§31/§59).
 The factory (`src/infrastructure/payments/index.ts`) picks
 `RazorpayProvider` when `PAYMENT_PROVIDER_KEY`/`SECRET` are configured,
 otherwise falls back to `StubPaymentProvider`, exactly mirroring
-`infrastructure/resend/index.ts`'s real-vs-console-fallback pattern.
+`infrastructure/email/index.ts`'s real-vs-console-fallback pattern.
 Verified against Razorpay's real test-mode API (test-mode key, no live
 charges) — `createOrder()` returns genuine `order_...` ids.
 
@@ -1960,7 +1960,7 @@ PAYMENT_FAILED
 REFUND_PROCESSED
 ```
 
-OTP email is handled by Auth/Resend, not FCM.
+OTP email is handled by Auth/Brevo, not FCM.
 
 ------------------------------------------------------------------------
 
@@ -2619,8 +2619,9 @@ REDIS_URL
 JWT_ACCESS_SECRET
 JWT_REFRESH_SECRET
 
-RESEND_API_KEY
-RESEND_FROM_EMAIL
+BREVO_API_KEY
+BREVO_FROM_EMAIL
+BREVO_FROM_NAME
 
 CLOUDINARY_CLOUD_NAME
 CLOUDINARY_API_KEY
@@ -2740,7 +2741,7 @@ External:
 
 ``` text
 Cloudinary
-Resend
+Brevo
 FCM
 Map Provider
 Payment Provider
@@ -2892,7 +2893,7 @@ driver cancellation while booking is being created
 
 Do not make unit tests depend on live:
 
--   Resend
+-   Brevo
 -   FCM
 -   Cloudinary
 -   Map provider
@@ -3018,7 +3019,7 @@ src/
 │   ├── redis/
 │   ├── queue/
 │   ├── cloudinary/
-│   ├── resend/
+│   ├── email/
 │   ├── fcm/
 │   ├── payments/
 │   ├── maps/
@@ -3777,7 +3778,7 @@ Use metrics to identify actual bottlenecks before optimizing.
       |                   |                   |
       |                   |        +----------+---------+
       |                   |        |    |      |       |
-      |                   |      Resend FCM Cloudinary Maps
+      |                   |      Brevo  FCM Cloudinary Maps
       |                   |                         |
       |                   |                    Payment Provider
       |
@@ -3800,7 +3801,7 @@ The `Support` module (§96.5) sits alongside the modules in the row
 above (Auth/User/Vehicle/Ride/Booking/Payment/Notification) — omitted
 from the box diagram above for width, not architecturally separate.
 Its external dependency is an AI Provider (Gemini initially),
-alongside Resend/FCM/Cloudinary/Maps/Payment Provider in the External
+alongside Brevo/FCM/Cloudinary/Maps/Payment Provider in the External
 APIs group.
 
 ------------------------------------------------------------------------
@@ -3990,7 +3991,7 @@ correctness trade-off `RazorpayProvider` already made for signature
 verification (§37, 2026-08-13). When `GEMINI_API_KEY` is unset, the
 factory falls back to a `ConsoleAIProvider` (logs the would-be prompt/
 response instead of calling out), matching the configured-vs-console-
-fallback pattern `infrastructure/resend/index.ts` and
+fallback pattern `infrastructure/email/index.ts` and
 `infrastructure/fcm/index.ts` already use — local development never
 requires a real key.
 
@@ -4387,7 +4388,7 @@ Record of intentional decisions made after the initial draft, per §91.
     parses the private key *synchronously* and throws immediately if
     it's not valid PEM — confirmed by an actual crash of the entire
     process at import time against this environment's `.env` (whose
-    `FCM_PRIVATE_KEY` is not a real PEM key). Unlike Resend/Razorpay,
+    `FCM_PRIVATE_KEY` is not a real PEM key). Unlike Brevo/Razorpay,
     where a bad key only fails lazily on first real API call, a bad FCM
     key was taking down the *whole backend* — auth, rides, payments,
     everything — over a misconfigured push credential. Fixed by wrapping
@@ -4542,3 +4543,51 @@ regardless of the drift.*
     `app/middleware/rateLimits.ts`, holding the one limit shared by two
     modules (vehicle and user document upload) so both draw from the same
     bucket.
+
+### 2026-08-17 (Email provider swap: Resend → Brevo)
+
+-   **`EmailProvider`'s implementation changed from Resend to Brevo, and the
+    directory was renamed `infrastructure/resend/` → `infrastructure/email/`.**
+    Product decision: consolidate on Brevo. The rename is the more important
+    half — `maps/`, `payments/`, and `ai/` are already named for the capability
+    rather than the vendor, which is the entire point of having the interface;
+    `resend/` was the odd one out, and a vendor-named folder would have needed
+    renaming again on the next swap. The `EmailProvider` interface itself is
+    unchanged, and the swap touched only that folder plus config — exactly the
+    Strategy-pattern outcome §17/§37 exist to produce.
+-   **`BrevoEmailProvider` uses raw `fetch` against Brevo's REST API v3
+    (`POST /v3/smtp/email`), not the `@getbrevo/brevo` SDK** — same reasoning as
+    `GeoapifyMapProvider`: one plain request/response with no intricate protocol
+    to hand-roll incorrectly. Contrast `RazorpayProvider` (§37) and
+    `GeminiProvider` (§96.5), which take SDKs precisely because signature crypto
+    and the tool-calling wire format are easy to get subtly wrong. Net effect:
+    the `resend` dependency was removed and nothing replaced it.
+-   **Fixed a real bug the swap exposed, which was the actual motivation.** The
+    Resend SDK resolves with `{ data, error }` rather than throwing, and
+    `resendEmailProvider.sendOtpEmail` awaited the call but ignored the returned
+    `error`. Every delivery failure — invalid key, unverified sender, exhausted
+    quota, rejected recipient — was silently discarded and
+    `POST /auth/request-otp` answered `200 "a verification code has been sent"`.
+    Confirmed against the live API: Resend returned `403` while the endpoint
+    returned `200`. `BrevoEmailProvider` now throws
+    `502 EMAIL_SEND_FAILED` on any non-2xx or network failure. Verified both
+    directions against the real Brevo API: a valid key delivers (Brevo's event
+    log shows `requests → delivered`), and a deliberately invalid key now yields
+    `502 EMAIL_SEND_FAILED` instead of a false success. This does not create an
+    account-enumeration channel (§9) — the failure is a provider/infrastructure
+    condition, reported identically whether or not the address has an account.
+-   **`AppError` gained an optional `{ cause }`.** Provider errors carry the
+    underlying failure so it survives to the error handler instead of being
+    thrown away by a bare `catch {}`. Never serialized to the client — Brevo's
+    error bodies can echo the recipient address (§61).
+-   **`assertProductionSecrets()` now refuses to boot in production without
+    Brevo and Razorpay credentials.** Previously a production deploy missing
+    them started normally and served traffic on `ConsoleEmailProvider` (OTPs
+    printed to stdout — broken login *and* credential disclosure) and
+    `StubPaymentProvider` (fake order ids against real bookings), warning only.
+    Confirmed by actually booting with `NODE_ENV=production` and watching it
+    serve `HTTP 200`. FCM and Gemini are deliberately *not* fatal: their
+    fallbacks degrade a feature rather than breaking money or credentials, so
+    they warn loudly instead of blocking a deploy. `TRUST_PROXY=false` in
+    production is now fatal too — every per-IP limit silently collapses onto the
+    load balancer's address without it (§49).

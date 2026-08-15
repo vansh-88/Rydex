@@ -3,7 +3,7 @@ import { RazorpayProvider } from './razorpayProvider.js';
 import { StubPaymentProvider } from './stubPaymentProvider.js';
 import type { PaymentProvider } from './paymentProvider.js';
 
-// Mirrors infrastructure/resend/index.ts's real-provider-vs-console-fallback
+// Mirrors infrastructure/email/index.ts's real-provider-vs-console-fallback
 // pattern exactly: configured key/secret -> real Razorpay, otherwise a stub
 // that never talks to a real gateway. Local dev/testing works either way.
 function createPaymentProvider(): { provider: PaymentProvider; name: string } {

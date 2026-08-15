@@ -10,6 +10,56 @@
 
 ------------------------------------------------------------------------
 
+## 0. Current Project State
+
+> Read this first. It tells you where the project actually is.
+
+``` text
+Phases 0-15   COMPLETE   backend implemented and verified
+Phase 16      NEXT       Render + Supabase + Upstash deployment
+Phase 17      BLOCKED    final deployed end-to-end integration
+```
+
+### Testing: what exists and what does not
+
+Phase 15 (Verification + Hardening) was completed through **manual/runtime
+verification**, not by introducing a persistent automated test suite. Two
+full passes drove the running application against the real stack, bugs found
+were fixed, and a regression pass re-verified them (steps.md §19, and §97
+below for every bug).
+
+**There is deliberately no automated test infrastructure in this repository:**
+no unit, integration, API, E2E, concurrency or failure-injection test files,
+no test directories, no fixtures, no test framework, and no `test` script in
+`package.json`. Do not state or imply that Rydex has an automated test suite,
+and do not create one unless explicitly asked.
+
+Automated testing remains **future technical hardening**, alongside
+structured logging (the codebase uses `console.*`) and OpenAPI generation —
+a suite is what would guard the verified behavior against future
+regressions.
+
+**Ratings are future scope and not implemented.** `users.rating_average` /
+`rating_count` are read by the fare strategy (§29) and returned in search
+results, but nothing writes them, so every driver's rating multiplier resolves
+to its neutral default. That is intended, not a bug. See steps.md §22a.
+
+### Deployment
+
+``` text
+NOW      Backend  -> Render Free Web Service
+         Postgres -> Supabase Free (PostgreSQL + PostGIS)
+         Redis    -> Upstash Free  (see the open constraint in §65)
+
+FUTURE   AWS ECS Fargate + RDS PostgreSQL/PostGIS
+         + ElastiCache Redis + Load Balancer
+```
+
+Current goal is a portfolio/demo deployment at minimal cost; AWS is the
+future production target. See §65 for both architectures and why they differ.
+
+------------------------------------------------------------------------
+
 ## 1. Product Overview
 
 Rydex is an India-focused carpooling / ride-sharing application.
@@ -366,7 +416,7 @@ Booking
 Payment
 Transaction
 IdempotencyKey
-Rating
+Rating          <- future scope, not implemented (steps.md §22a)
 Notification
 UserDevice
 Conversation
@@ -2716,9 +2766,66 @@ desired.
 Production infrastructure should not depend on the development Compose
 file.
 
+This Compose file is for **local development only**. The current deployment
+target (Render, §65) builds and runs the Node service directly and needs no
+Dockerfile; Supabase and Upstash replace these two containers. A production
+container image belongs to the future AWS target, where ECS Fargate requires
+one.
+
 ------------------------------------------------------------------------
 
-## 65. Production Deployment Target
+## 65. Deployment Targets
+
+Rydex has two deployment targets: the one it is being deployed to **now**,
+and the one it is designed to move to **later**. They are not equivalent and
+the documentation should never imply they are.
+
+### Current target --- portfolio / demo (Phase 16)
+
+``` text
+                    Internet
+                       |
+                     HTTPS
+                       |
+                       v
+              Render Web Service
+              Rydex Backend (Node)
+              HTTP + Socket.IO + BullMQ workers
+                   /            \
+                  v              v
+           Supabase            Upstash
+      PostgreSQL + PostGIS      Redis
+```
+
+External providers are unchanged in both targets:
+
+``` text
+Cloudinary
+Brevo
+FCM
+Map Provider
+Payment Provider
+AI Provider
+```
+
+The backend runs as a single process serving HTTP, WebSocket and all three
+BullMQ workers together. That is acceptable for a demo and is what makes
+Render's free-tier sleep behavior matter (steps.md §20).
+
+**Docker is not used for this target.** Render builds and runs the Node
+service directly from the repository, so a Dockerfile would add an artifact
+to maintain without changing what runs. Containerization belongs to the AWS
+target below, where it is genuinely required.
+
+**Idle Redis cost (steps.md §20):** BullMQ workers poll continuously, so the
+application spends Redis commands even at rest — which matters on hosted Redis
+that meters per command. At BullMQ's defaults this measured ~332 commands/
+minute (~478k/day) idle. `QUEUE_DRAIN_DELAY_SECONDS` and
+`QUEUE_STALLED_INTERVAL_SECONDS` now tune it: at the current default of 60s
+it is ~24/minute (~34.6k/day), a 13.8x reduction, with immediate and delayed
+job latency unaffected.
+
+### Future target --- production (§23, not scheduled)
 
 For approximately 10K users:
 
@@ -2737,21 +2844,28 @@ RDS PostgreSQL          ElastiCache Redis
 + PostGIS
 ```
 
-External:
+Kubernetes is unnecessary at this scale.
+
+### Why they differ
 
 ``` text
-Cloudinary
-Brevo
-FCM
-Map Provider
-Payment Provider
+current goal    portfolio / demo deployment at minimal cost
+future goal     scalable production infrastructure
 ```
 
-Kubernetes is unnecessary at this scale.
+The application should require no architectural change to migrate: every
+external dependency already sits behind an interface (§17/§37/§42/§96.5) or
+a connection string. Migration is a matter of configuration, containerization
+and separating the workers from the API process --- not a rewrite.
 
 ------------------------------------------------------------------------
 
 ## 66. Scaling Strategy
+
+This describes the **future AWS production target** (§65). The current
+Render deployment runs a single free-tier instance and does not scale
+horizontally; the statelessness requirements below still apply to it, and are
+what make the migration a configuration change rather than a rewrite.
 
 Initially:
 
@@ -2838,6 +2952,12 @@ driverId
 ------------------------------------------------------------------------
 
 ## 69. Testing Strategy
+
+**Current state (Phase 15, complete):** none of the automated levels below
+exist in the repository. The verification they describe was performed
+manually against the running application instead --- see §0 and steps.md §19.
+The section is retained as the specification for the automated suite if and
+when it is built; it does not describe code that exists today.
 
 Use multiple testing levels.
 
@@ -4761,3 +4881,85 @@ regardless of the drift.*
     message. Verified: `missing 'error' handler on this Redis client` no longer
     appears during an outage, and a full chat round trip (join -> send ->
     broadcast -> persisted) still works afterwards without a restart.
+
+### 2026-08-19 (Roadmap: Phase 15 closed, deployment retargeted to Render/Supabase/Upstash)
+
+-   **Phase 15 rewritten from "Testing + Hardening" to "Verification +
+    Hardening", and marked complete.** The phase originally specified unit,
+    integration, API, concurrency and failure *test suites*. The verification
+    those suites were meant to provide was performed — two full passes driving
+    the running application against the real stack, with every bug found fixed
+    and re-verified — but no test framework was introduced. steps.md §19 now
+    records what was exercised: build health, functional flows, security and
+    IDOR boundaries, all six concurrency/idempotency scenarios, and the
+    failure paths.
+-   **The documentation must not claim an automated test suite exists**, because
+    none does. A new §0 states the current milestone and the testing position
+    up front, and §69 (Testing Strategy) is now labelled as the specification
+    for a suite that has not been built rather than a description of existing
+    code. Automated testing stays on the roadmap as future hardening, together
+    with structured logging and OpenAPI.
+-   **Deployment target split into current and future (§65).** The immediate
+    target is Render + Supabase + Upstash for a portfolio/demo deployment at
+    minimal cost; AWS ECS Fargate + RDS + ElastiCache + load balancer is
+    preserved as the future production target. The two are documented as
+    deliberately non-equivalent. Migration should be configuration,
+    containerization and splitting the workers out of the API process — not a
+    rewrite — because every external dependency already sits behind an
+    interface or a connection string.
+-   **Docker dropped from Phase 16 and moved to the future AWS scope.** The old
+    Phase 16 mandated a Dockerfile only because ECS Fargate can exclusively run
+    containers. Render builds and runs the Node service directly from the repo,
+    so an image would be an artifact to maintain with nothing to show for it.
+    §64 now marks the Compose file as development-only.
+-   **A blocking constraint was measured, not assumed, before writing the
+    Phase 16 plan.** An idle Rydex with zero traffic issues ~344 Redis
+    commands/minute (bzpopmin + zrangebyscore + evalsha from three polling
+    BullMQ workers), i.e. roughly 495,000 commands/day at rest. A
+    command-metered free tier such as Upstash's is exhausted by that alone, so
+    steps.md §20 records the Redis provider as an explicit decision to be
+    settled before implementation, with the options and their consequences.
+    Related: Render's free tier sleeps when idle, and because the workers share
+    the API process, delayed jobs (seat-hold expiry) fire late on wake — they
+    are not lost, which was confirmed locally.
+-   **Stale business rule corrected in Phase 17, documentation only.** Its
+    driver journey still read "Upload documents (verification pending, does not
+    block)" with ride eligibility as "ownership + ACTIVE + seat capacity".
+    That was superseded by §97 (2026-08-11) and §8/§96, and the running code
+    rejects an unverified vehicle with `409 VEHICLE_NOT_ELIGIBLE` (confirmed at
+    runtime). steps.md §21 now states the rule the code enforces. **No code was
+    changed** — the documentation was wrong, not the implementation.
+-   **Rating flagged in Phase 17 rather than silently verified.** The journey
+    ends in "Rating", but there is no Rating model or endpoint and
+    `users.rating_average` is never written. Phase 17 now says so and requires
+    it to be implemented or struck before that phase runs.
+
+### 2026-08-19 (BullMQ idle polling made configurable and reduced 13.8x)
+
+-   **`QUEUE_DRAIN_DELAY_SECONDS` (default 60) and
+    `QUEUE_STALLED_INTERVAL_SECONDS` (default 300) now tune worker polling**,
+    applied to all three Workers through a shared `workerPollingOptions` in
+    `infrastructure/queue/connection.ts`. BullMQ's defaults are `drainDelay: 5`
+    and `stalledInterval: 30000`; a Worker re-issues its blocking `BZPOPMIN`
+    every drain cycle, so those defaults cost Redis commands continuously even
+    with the application idle. On Redis priced per command (steps.md §20) that
+    is billable traffic for doing nothing.
+-   **Measured, not estimated.** Idle, zero traffic, excluding the local
+    docker-compose healthcheck: ~332 commands/minute (~478k/day) at the
+    defaults, ~24/minute (~34.6k/day) at 60s. The cost is deterministic — each
+    Worker issues exactly 8 commands per drain cycle — so
+    `3 * 8 * (86400 / drainDelay)` predicts it, and matches the measurement
+    exactly at 60s.
+-   **The earlier ~495k/day figure was slightly overstated** and is corrected
+    here: 12 commands/minute of it were docker-compose's `redis-cli ping`
+    healthcheck, proved by stopping the application and watching the pings
+    continue unchanged. That is local development infrastructure and will not
+    exist in a deployed environment.
+-   **Verified that raising these does not delay work.** `BZPOPMIN` wakes the
+    moment a job is pushed, so the drain delay never applies to an enqueued
+    job: an immediate job was processed in ~300ms, and delayed jobs still fired
+    within ~300ms of schedule (+5s -> 5304ms, +10s -> 10277ms). Seat-hold
+    expiry therefore keeps its precision (§35/§36). The genuine trade-off is
+    stalled-job recovery, which now takes up to `QUEUE_STALLED_INTERVAL_SECONDS`
+    after a worker dies mid-job rather than 30s — acceptable because every
+    Rydex job is short.

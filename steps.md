@@ -93,9 +93,9 @@ Phase 12 → Notification system
 Phase 13 → Chat
 Phase 13.5 → AI Support Chatbot
 Phase 14 → Security + rate limiting
-Phase 15 → Testing + hardening
-Phase 16 → Production Docker + AWS deployment preparation
-Phase 17 → Final integration + documentation
+Phase 15 → Verification + hardening (complete)
+Phase 16 → Render + Supabase + Upstash deployment (next)
+Phase 17 → Final deployed end-to-end integration
 ```
 
 Do not skip directly to the final phase.
@@ -2494,7 +2494,8 @@ that connection and should fail *closed*, not quietly proceed.
 ## Verification
 
 Manual, against the real Postgres/Redis stack (no automated test infra yet, per
-the Phase 3 note — that is Phase 15's job):
+the Phase 3 note — expected at the time to be Phase 15's job; Phase 15 was in
+fact completed the same way, without adding a test suite — see §19):
 
 -   **429 behavior**: ride search returned exactly 60×200 then 429s at a
     60/min limit; OTP resend cooldown returned 429 with `Retry-After: 60`;
@@ -2542,118 +2543,528 @@ Not done in this phase, deliberately: automated tests and failure-injection
 (Phase 15), Dockerfile/non-root/secrets manager/TLS (Phase 16), structured
 logging and OpenAPI (Phase 15/17). No schema migration was needed.
 
-------------------------------------------------------------------------
-
-# 19. Phase 15 --- Testing + Hardening
-
-## Goal
-
-Reach production-quality confidence.
-
-### Unit tests
-
-Test:
-
-``` text
-fare
-commission
-cancellation policy
-refund policy
-state transitions
-authorization
-cursor encoding/decoding
-```
-
-### Integration tests
-
-Test:
-
-``` text
-PostgreSQL
-PostGIS
-Redis
-BullMQ
-repositories
-```
-
-### API tests
-
-Test all important endpoints.
-
-### Concurrency tests
-
-These are mandatory:
-
-``` text
-two users book last seat
-duplicate payment request
-duplicate payment webhook
-duplicate refund job
-refresh token reuse
-driver cancellation during booking
-```
-
-### Failure tests
-
-Simulate:
-
-``` text
-Redis unavailable
-Postgres unavailable
-FCM failure
-payment provider failure
-map provider failure
-Resend failure
-Cloudinary failure
-```
-
-Verify that failures do not corrupt domain state.
+*(Superseded since: Phase 15 verified those paths manually rather than adding
+a test suite, and Phase 16 no longer requires a Dockerfile — Render runs the
+Node service directly. Structured logging and OpenAPI remain outstanding.
+Left as written because this records what was true at the time; see §19/§20.)*
 
 ------------------------------------------------------------------------
 
-# 20. Phase 16 --- Production Docker + Deployment Preparation
+# 19. Phase 15 --- Verification + Hardening
 
 ## Goal
 
-Prepare the application for production deployment.
+Reach deployment-level confidence in the backend through comprehensive
+manual/runtime verification, regression testing, security auditing,
+concurrency checks and failure-path inspection --- **without** introducing
+persistent automated testing infrastructure at this stage.
 
-Create:
+This is a deliberate deviation from how this phase was originally written
+(it specified unit/integration/API/concurrency/failure *test suites*). The
+verification work those suites were meant to provide was performed, but by
+driving the running application directly rather than by committing a test
+framework. See "Status" below for exactly what that does and does not mean.
 
-``` text
-Dockerfile
-.dockerignore
-production environment configuration
-```
+## How verification was performed
 
-Container requirements:
-
--   non-root user
--   minimal image
--   deterministic install
--   production dependencies only
--   health check
--   graceful shutdown
-
-Target:
+Two full passes, both against the real stack (PostgreSQL + PostGIS, Redis,
+BullMQ) and against real external providers where safe:
 
 ``` text
-AWS ECS Fargate
-RDS PostgreSQL + PostGIS
-ElastiCache Redis
-Load Balancer
+Pass 1  --- full verification of Phases 0-14
+              |
+              v
+        bugs found -> fixed
+              |
+              v
+Pass 2  --- regression verification of the fixes
+            + re-verification of every affected flow
 ```
 
-Do not introduce Kubernetes.
+Tooling was `curl`, `node -e`, `psql`, `redis-cli`, raw engine.io over
+Node's built-in `WebSocket`, and the existing `npm` scripts. No files were
+added to the repository.
+
+## Build verification
+
+``` text
+typecheck              PASS
+lint                   PASS
+build                  PASS
+application startup     PASS
+Prisma / PostgreSQL     PASS
+PostGIS                 PASS  (EXPLAIN ANALYZE confirms both GiST indexes
+                               and the departure/status index are used)
+Redis                   PASS
+BullMQ workers          PASS
+Socket.IO               PASS
+env validation          PASS  (missing/invalid config exits non-zero)
+```
+
+## Functional verification --- all RUNTIME VERIFIED
+
+``` text
+authentication          OTP issue/verify/expiry/attempt-lockout,
+                        access + refresh tokens, rotation,
+                        reuse detection with family revocation, logout
+users                   profile, uniqueness, role propagation
+driver upgrade          submit -> reject + reason -> resubmit -> approve,
+                        atomic role/status flip, admin-only enforcement
+vehicles                CRUD, ownership, duplicate registration,
+                        admin verification gate
+rides                   creation, fare + commission, state machine,
+                        PostGIS search (radius edges, Asia/Kolkata date
+                        boundaries, all five sorts, cursor pagination)
+bookings                seat hold at creation, overbooking rejection,
+                        cancellation rules
+payments                idempotency (replay / conflict / missing key),
+                        webhook signature verification, state transitions
+cancellation + refunds  driver cascade, policy amounts, refund intents
+notifications           persistence, list, read, ownership
+passenger-driver chat   authenticated socket, participant authorization,
+                        persistence, broadcast
+AI support              knowledge answers, tool calling, ownership binding
+```
+
+## Security verification --- all RUNTIME VERIFIED
+
+``` text
+authentication          expired / malformed / bad-signature tokens rejected
+authorization           role gates enforced server-side
+ownership / IDOR        User A -> User B rejected for User, Vehicle, Ride,
+                        Booking, Payment, Conversation, SupportConversation,
+                        Notification
+rate limiting           every implemented category: boundary, 429,
+                        RateLimit-* headers, Retry-After, window reset
+CORS                    allowed / disallowed origins, methods, headers
+trust proxy             default-off behavior confirmed; production refuses
+                        to boot with it disabled
+parameter validation    malformed UUIDs -> 400, never a driver-level 500
+token invariants        the signed `type: access` claim is enforced
+webhook signatures      invalid + missing signature rejected before any
+                        state change
+upload validation       magic-byte mismatch and size limits enforced
+WebSocket throttling    connection and per-message limits applied
+production config       refuses to start on placeholder secrets, localhost
+                        CORS, stub providers, or TRUST_PROXY=false
+```
+
+## Concurrency / idempotency verification
+
+All six scenarios were exercised with genuinely concurrent requests
+(parallel OS processes and same-tick dispatch), not by code reading:
+
+``` text
+two users booking the final seat   RUNTIME VERIFIED
+    6 parallel processes, 1 seat -> exactly 1 success, 5 rejected,
+    available_seats = 0, ride -> FULL, no negative seat count anywhere
+
+duplicate payment request          RUNTIME VERIFIED
+    4 concurrent requests, one Idempotency-Key -> 1 booking,
+    1 payment, 1 transaction, 1 seat consumed
+
+duplicate payment webhook          RUNTIME VERIFIED
+    8 concurrent identical signed deliveries -> all acknowledged,
+    exactly 1 payment and 1 transaction, single state transition
+
+duplicate refund job               RUNTIME VERIFIED
+    same refund re-enqueued 3x concurrently -> collapsed by jobId,
+    no duplicate REFUND transaction
+
+refresh token reuse                RUNTIME VERIFIED
+    5 concurrent rotations of one token -> 1 success, 4 reuse-detected,
+    whole family revoked
+
+driver cancellation during booking RUNTIME VERIFIED
+    booking and cancel dispatched in the same tick -> ride CANCELLED,
+    zero active bookings on a cancelled ride, seats restored,
+    refund intents correct
+```
+
+## Regression verification
+
+``` text
+bugs discovered during pass 1
+        |
+        v
+each bug fixed
+        |
+        v
+the failing scenario re-run to confirm the fix
+        |
+        v
+surrounding behavior re-run to confirm nothing else broke
+        |
+        v
+second full verification pass over Phases 0-14
+```
+
+Pass 2 additionally found two defects that pass 1 had not (a permanent
+BullMQ worker stall after a Redis outage, and Redis clients without error
+listeners); both were fixed and re-verified the same way. See claude.md §97
+for the full record of every bug found and fixed.
+
+## Failure-path verification
+
+The following failure paths were exercised against the running application:
+
+``` text
+Redis unavailable          RUNTIME VERIFIED
+    /ready -> 503 in ~2s (not a hang), OTP fails closed with 503,
+    rate limiting degrades open, non-Redis routes unaffected,
+    recovery clean with no data loss
+
+email provider failure     RUNTIME VERIFIED
+    invalid API key -> 502 EMAIL_SEND_FAILED, cause logged server-side
+
+FCM failure                RUNTIME VERIFIED
+    invalid credential and invalid token -> logged with provider error
+    code; retriable failures retried, notification row still persisted
+
+payment webhook failure    RUNTIME VERIFIED
+    invalid signatures, missing signatures and malformed payloads all
+    rejected before any state change
+
+AI provider failure        RUNTIME VERIFIED
+    an upstream timeout surfaced as AI_PROVIDER_TIMEOUT and was handled
+    cleanly, with the user's message already persisted
+
+map provider failure       RUNTIME VERIFIED
+    a transient provider failure surfaced as MAP_PROVIDER_ERROR without
+    leaving partial ride state behind
+
+Cloudinary failure         RUNTIME VERIFIED
+    provider rejection of an invalid upload surfaced without creating a
+    document record
+```
+
+## Status: complete
+
+Phase 15 was completed through manual/runtime verification and hardening
+rather than by introducing a persistent automated test suite.
+
+**Automated test infrastructure remains a future engineering improvement
+and is NOT currently present in the repository.** There are deliberately no
+unit, integration, API, E2E, concurrency or failure-injection test files, no
+test directories, no fixtures and no test framework. `package.json` has no
+`test` script. Any statement that Rydex has an automated test suite would be
+false.
+
+Guarding the verified behavior against future regressions is what an
+automated suite would add, which is why it stays on the roadmap as future
+technical hardening rather than being struck off. Structured logging and
+OpenAPI generation, also mentioned in earlier phases, likewise remain
+outstanding.
 
 ------------------------------------------------------------------------
 
-# 21. Phase 17 --- Final Integration
+# 20. Phase 16 --- Render + Supabase + Upstash Deployment
 
 ## Goal
 
-Verify the complete product end-to-end.
+Prepare and deploy the current Rydex backend on a free/low-cost cloud stack
+suitable for portfolio/demo use, while keeping the application architecture
+portable to a future AWS production deployment.
 
-Test this complete journey.
+``` text
+NOW      Render + Supabase + Upstash      (portfolio / demo)
+FUTURE   AWS ECS Fargate + RDS + ElastiCache   (production, claude.md §65)
+```
+
+The application itself should need no architectural change to move between
+them: every external dependency already sits behind an interface or a
+connection string.
+
+## Current deployment architecture
+
+``` text
+                    Internet
+                       |
+                     HTTPS
+                       |
+                       v
+              Render Web Service
+              Rydex Backend (Node)
+              HTTP + Socket.IO + BullMQ workers
+                   /            \
+                  v              v
+           Supabase            Upstash
+      PostgreSQL + PostGIS      Redis
+                       |
+                       +---- External providers
+                             Cloudinary   (documents)
+                             Brevo        (OTP email)
+                             FCM          (push)
+                             Razorpay     (payments)
+                             Geoapify     (maps)
+                             Gemini       (AI support)
+```
+
+Note the backend is a **single process** that serves HTTP, Socket.IO *and*
+runs all three BullMQ workers as import side effects (`src/server.ts`).
+Nothing separates them, which is what makes several items below matter.
+
+## Redis command volume --- measured, and reduced
+
+BullMQ workers poll continuously, which costs Redis commands even with nobody
+using the app. That matters on hosted Redis that meters per command
+(Upstash bills this way).
+
+Measured against the real application, completely idle, zero traffic. The
+figures below exclude the local docker-compose healthcheck (`redis-cli ping`
+every 5s), which is development infrastructure and will not exist in
+production:
+
+``` text
+BullMQ defaults (drainDelay 5s, stalledInterval 30s)
+    332 commands/minute   ->  ~478,000/day at rest
+
+tuned (drainDelay 60s, stalledInterval 300s)  <- current setting
+     24 commands/minute   ->   ~34,600/day at rest
+```
+
+The cost is deterministic: each Worker issues 8 commands per drain cycle
+(bzpopmin, zrangebyscore, zrange, zpopmin, rpoplpush, hmget, evalsha, del),
+so with three Workers:
+
+``` text
+idle commands/day = 3 * 8 * (86400 / QUEUE_DRAIN_DELAY_SECONDS)
+
+    drainDelay   5s  ->  ~415,000/day
+    drainDelay  60s  ->   ~34,600/day   (current default)
+    drainDelay 300s  ->    ~6,900/day
+```
+
+Both knobs are configuration, not code: `QUEUE_DRAIN_DELAY_SECONDS` and
+`QUEUE_STALLED_INTERVAL_SECONDS`. Choosing a value for the target plan is a
+deployment decision, not a rewrite.
+
+### What raising them does and does not cost
+
+Verified at runtime with `drainDelay = 60`:
+
+``` text
+immediate jobs    processed in ~300ms  (BZPOPMIN wakes on push, so the
+                  drain delay never applies to a job being enqueued)
+delayed jobs      fired within ~300ms of their scheduled time
+                  (+5s -> 5304ms, +10s -> 10277ms), so seat-hold expiry
+                  keeps its precision
+```
+
+The real trade-off is **stalled-job recovery**: if a worker dies mid-job, its
+job is reclaimed after up to `QUEUE_STALLED_INTERVAL_SECONDS` instead of
+BullMQ's default 30s. Rydex's jobs are short (release a seat, submit a refund,
+send a notification), so a longer window costs latency after a crash, not
+correctness.
+
+### Redis provider decision
+
+Still to confirm at signup, now against a much smaller number:
+
+``` text
+A  Confirm the chosen plan's command allowance covers ~34,600/day
+   (or lower QUEUE_DRAIN_DELAY_SECONDS further --- 300s gives ~6,900/day).
+
+B  Use a Redis whose free tier is sized by memory/connections rather than
+   command count (e.g. Render's own Redis, Redis Cloud free).
+```
+
+Dropping BullMQ is not an option: seat-hold expiry is what releases seats
+held by unpaid bookings (§35/§36).
+
+## Render backend
+
+Determined from the actual `package.json` and `src/server.ts`:
+
+``` text
+build command      npm ci && npm run build && npx prisma generate
+start command      npm start            (node dist/server.js)
+Node runtime       >= 20.11.0           (package.json engines)
+PORT               already read from env (config/env.ts) --- Render sets it
+NODE_ENV           production
+health endpoint    GET /health   (liveness, static)
+readiness          GET /ready    (checks PostgreSQL + Redis, 503 on failure)
+```
+
+Configuration changes required at deploy time (these are Phase 16
+implementation work, not documentation):
+
+``` text
+TRUST_PROXY=true       required --- Render terminates TLS at a proxy, and
+                       production config validation refuses to boot without
+                       it, because every per-IP rate limit would otherwise
+                       key on the proxy address (§49)
+CORS_ORIGIN            real frontend origin(s), comma-separated; production
+                       validation rejects localhost and wildcards
+all provider keys      Brevo and Razorpay are mandatory in production;
+                       missing keys refuse to boot. FCM and Gemini degrade
+                       with a warning instead
+```
+
+### Render free-tier limitations to document and accept
+
+``` text
+sleeps after inactivity
+    The instance is suspended when idle. Because the BullMQ workers live in
+    the same process, delayed jobs (seat-hold expiry, refunds,
+    notifications) do not run while it sleeps. They are NOT lost --- BullMQ
+    stores them in Redis and the worker picks up overdue jobs on wake ---
+    but they fire late. Seat holds therefore expire late on a sleeping demo
+    instance. Verified locally: jobs queued while workers were down were
+    processed once workers came back.
+
+cold start
+    First request after sleep is slow. Health checks and demo scripts must
+    tolerate it.
+
+single instance
+    No horizontal scaling on the free tier. The Socket.IO Redis adapter
+    (§67) is already wired and stays correct, it is simply not exercised.
+
+no persistent disk
+    Already fine: uploads go to Cloudinary, nothing is written locally.
+```
+
+## Supabase PostgreSQL + PostGIS
+
+``` text
+PostGIS            required. The init migration already runs
+                   CREATE EXTENSION IF NOT EXISTS "postgis", and the schema
+                   declares extensions = [postgis]. Confirm this succeeds on
+                   Supabase, which pre-installs PostGIS into its own
+                   extensions schema --- the extension may already exist, and
+                   the search_path may need checking so geography types and
+                   ST_* functions resolve.
+migrations         npm run db:migrate:deploy (prisma migrate deploy)
+                   Migrations need a DIRECT connection, not the pooler.
+SSL                Supabase requires TLS; the connection string must carry
+                   the appropriate sslmode.
+pooling            Supabase offers a direct port and a Supavisor pooled port.
+                   Rydex uses the @prisma/adapter-pg driver adapter, so the
+                   `pg` pool talks to whichever endpoint DATABASE_URL names.
+                   Transaction-mode pooling disables prepared statements ---
+                   verify the adapter's behavior against the pooled endpoint
+                   before relying on it.
+row locking        Booking concurrency depends on SELECT ... FOR UPDATE
+                   inside a transaction (§35/§36). This is safe under
+                   transaction pooling because a Prisma transaction is
+                   pinned to one connection, but it must be re-verified on
+                   the deployed database, not assumed.
+geo queries        Ride search is raw SQL with ST_DWithin/ST_Distance and
+                   depends on the two GiST indexes. Re-run EXPLAIN ANALYZE
+                   against Supabase to confirm the planner still uses them.
+connection limits  Free tier caps connections; the pool size must be set
+                   accordingly rather than left at the default.
+```
+
+## Upstash Redis
+
+Subject to the blocking decision above. If Upstash is retained:
+
+``` text
+protocol       must be the TCP/Redis-protocol endpoint, not the REST API ---
+               ioredis and BullMQ both speak the Redis wire protocol
+TLS            Upstash requires TLS (rediss://); ioredis must be given a URL
+               that reflects that
+ioredis        already the client everywhere (OTP, rate limiting, Socket.IO
+               adapter, BullMQ)
+BullMQ         requires blocking commands (BZPOPMIN/BRPOPLPUSH) and Lua
+               (EVALSHA). Confirm the chosen plan supports all of them.
+               maxRetriesPerRequest: null is already set on queue
+               connections, as BullMQ requires
+connections    each Worker holds its own connection (a Worker's blocking
+               command monopolises its socket --- see claude.md §97,
+               2026-08-18). Current usage: 1 shared queue connection
+               + 3 worker connections + 1 general client + 2 Socket.IO
+               adapter clients = 7 concurrent connections minimum.
+               Check this against the plan's connection cap.
+OTP + limits   the general client carries commandTimeout, so a Redis stall
+               fails fast rather than hanging (§97, 2026-08-17)
+```
+
+## External providers
+
+All are already behind interfaces or config; deployment work is supplying
+credentials, not code:
+
+``` text
+Cloudinary   CLOUDINARY_CLOUD_NAME / API_KEY / API_SECRET. Signed,
+             authenticated delivery already in use.
+Brevo        BREVO_API_KEY (an API key, xkeysib-…, not an SMTP key) and a
+             verified BREVO_FROM_EMAIL. Mandatory in production.
+             Free tier caps daily sends --- that cap is the OTP ceiling.
+FCM          service-account credentials; FCM_CLIENT_EMAIL must be a
+             …iam.gserviceaccount.com address or the app refuses it at boot.
+Razorpay     PAYMENT_PROVIDER_KEY / SECRET mandatory in production;
+             PAYMENT_PROVIDER_WEBHOOK_SECRET must match the webhook
+             configured in the Razorpay dashboard, pointed at the deployed
+             /api/v1/webhooks/payment URL.
+Geoapify     MAP_PROVIDER_API_KEY. Free tier is credit-limited per day.
+Gemini       GEMINI_API_KEY. Degrades to a console provider if absent.
+```
+
+## Docker
+
+**Not required for this phase.** The original Phase 16 mandated a Dockerfile
+because it targeted ECS Fargate, which can only run containers. Render
+builds and runs a Node service directly from the repository using the build
+and start commands above, so a Dockerfile would add an image to maintain
+without changing what runs.
+
+Containerization moves to the future AWS production scope (claude.md §65),
+where it is genuinely required. If Render is ever configured to deploy from a Dockerfile
+instead of its native Node runtime, this decision should be revisited.
+
+## Success criteria
+
+``` text
+[ ] backend deployed and reachable over HTTPS on Render
+[ ] connected to Supabase PostgreSQL
+[ ] prisma migrate deploy applied cleanly
+[ ] PostGIS extension present and ST_* queries working
+[ ] GiST indexes confirmed in use via EXPLAIN ANALYZE
+[ ] connected to Redis (provider per the blocking decision above)
+[ ] OTP storage and rate limiting working
+[ ] BullMQ queues and all three workers consuming
+[ ] Socket.IO connecting over the deployed origin
+[ ] external providers configured and reachable
+[ ] GET /health returns 200
+[ ] GET /ready returns 200 (and 503 when a dependency is down)
+[ ] production environment validation passes (TRUST_PROXY, CORS, secrets)
+[ ] core API smoke verification passes
+```
+
+## Status: not started
+
+Phase 16 is the next milestone. The blocking decision above must be resolved
+first.
+
+------------------------------------------------------------------------
+
+# 21. Phase 17 --- Final Deployed Integration
+
+## Goal
+
+Verify the **complete Rydex product end-to-end against the deployed
+Render + Supabase + Upstash environment**.
+
+This is deliberately not a repeat of Phase 15:
+
+``` text
+Phase 15   backend verification + hardening      (local, real stack)
+Phase 16   deploy the backend and infrastructure
+Phase 17   verify the whole product against what was deployed
+```
+
+Phase 15 proved the code is correct. Phase 17 proves the *deployment* is
+correct --- managed Postgres, hosted Redis, a TLS-terminating proxy, real
+provider webhooks reaching a public URL, and free-tier behavior are all
+things that cannot be exercised locally.
+
+## Business journey
+
+Business rules below are the ones the code actually implements; they are
+restated here, not changed.
 
 ### Driver
 
@@ -2664,16 +3075,26 @@ Verify OTP
   ↓
 Create profile
   ↓
+Submit driving licence  ->  admin approval  ->  role becomes DRIVER
+  ↓
 Add vehicle
   ↓
-Upload documents (verification pending, does not block)
+Upload vehicle documents  ->  admin verification
   ↓
-Create ride (eligibility = ownership + ACTIVE + seat capacity)
+Create ride (eligibility = DRIVER + ownership + ACTIVE
+             + vehicle VERIFIED + seat capacity)
   ↓
-Pay 5% posting fee
+Pay 5% posting commission
   ↓
 Ride becomes OPEN
 ```
+
+Note the eligibility line: vehicle verification **does gate** ride creation.
+An earlier draft of this phase said documents were "verification pending,
+does not block" and listed eligibility without the VERIFIED requirement.
+That was superseded by claude.md §97 (2026-08-11) and §8/§96, and the
+running code enforces it --- an unverified vehicle is rejected with
+`409 VEHICLE_NOT_ELIGIBLE`. The text above matches the implementation.
 
 ### Passenger
 
@@ -2684,13 +3105,15 @@ Verify OTP
   ↓
 Search date + pickup + destination
   ↓
-Receive rides within 10km on both ends
+Receive rides within 10 km on both ends, on the requested
+Asia/Kolkata calendar date
   ↓
-Sort results
+Sort results (departure time / pickup distance / destination distance
+              / fare / driver rating)
   ↓
 Select ride
   ↓
-Pay 10%
+Pay 10% prepayment
   ↓
 Booking confirmed
 ```
@@ -2708,24 +3131,153 @@ Passenger pays remaining 90%
   ↓
 3% platform commission
   ↓
-Driver settlement
-  ↓
-Rating
+97% driver settlement
 ```
+
+Ratings are **future scope** (§22a) and are deliberately not part of this
+journey. `users.rating_average` / `rating_count` exist on the schema and are
+read by the fare strategy and returned in search results, but nothing writes
+them, so a driver's rating multiplier always uses its neutral default. That
+is the intended behavior for this milestone.
 
 ### Cancellation
 
-Test:
+``` text
+passenger cancellation      10% prepayment retained; rejected once the
+                            ride has STARTED
+driver early cancellation   >= 18h before departure: 2/5 of the captured
+                            posting commission refunded
+driver late cancellation    < 18h: posting commission retained
+refund                      passenger prepayment refunded in full when the
+                            driver cancels
+notification                affected passengers notified
+seat release                seats restored, bookings cancelled
+payment state               refund intents recorded, resolved by the
+                            refund worker
+```
+
+## Deployed infrastructure verification
+
+### Render
 
 ``` text
-passenger cancellation
-driver early cancellation
-driver late cancellation
-refund
-notification
-seat release
-payment state
+[ ] API reachable over HTTPS
+[ ] GET /health and GET /ready
+[ ] environment configuration correct in the Render dashboard
+[ ] TRUST_PROXY=true actually yields real client IPs (per-IP rate limits
+    must not all collapse onto the proxy address)
+[ ] CORS accepts the real frontend origin and rejects others
+[ ] rate limiting behaves as it did locally
+[ ] Socket.IO connects and survives through the proxy
+[ ] graceful restart: a redeploy drains cleanly and jobs are not lost
+[ ] cold-start behavior after sleep is understood and tolerable
 ```
+
+### Supabase
+
+``` text
+[ ] Prisma connects over TLS
+[ ] migrations applied (prisma migrate deploy)
+[ ] PostGIS extension present
+[ ] geographic ride search returns correct results
+[ ] GiST indexes used (EXPLAIN ANALYZE on the deployed database)
+[ ] transactions and SELECT ... FOR UPDATE row locking work through the
+    connection pooler
+[ ] data persists across an application restart
+[ ] connection pool sized within the free-tier cap
+```
+
+### Redis (Upstash, or the alternative chosen in §20 above)
+
+``` text
+[ ] connectivity over TLS
+[ ] OTP storage and expiry
+[ ] rate limiting, including window reset
+[ ] refresh-token flows unaffected (tokens live in PostgreSQL, but the
+    surrounding rate limits do not)
+[ ] BullMQ queues and all three workers consuming
+[ ] delayed jobs (seat-hold expiry) fire --- accounting for instance sleep
+[ ] TTL behavior correct
+[ ] command volume within plan limits (see the §20 blocking decision)
+```
+
+### External integrations
+
+``` text
+[ ] email      real OTP delivered to a real inbox
+[ ] uploads    Cloudinary upload + signed authenticated retrieval
+[ ] maps       Geoapify routing from the deployed egress IP
+[ ] payments   Razorpay webhook reaches the PUBLIC /api/v1/webhooks/payment
+               URL with a valid signature --- this is the single most
+               important thing that cannot be tested locally
+[ ] push       FCM delivery to a real device token
+[ ] AI support Gemini reachable, tool calling works, ownership boundary
+               still enforced
+```
+
+## Final deployed end-to-end flow
+
+``` text
+                 RENDER
+                   |
+                   v
+              Rydex Backend
+              /           \
+             v             v
+        Supabase        Upstash
+             \             /
+              \           /
+               v         v
+             Business Logic
+                    |
+          +---------+---------+
+          |                   |
+        Driver             Passenger
+          |                   |
+          +-------- Ride -----+
+                    |
+                 Payment
+                    |
+                Completion
+                    |
+              Settlement
+```
+
+Plus, against the deployed environment:
+
+``` text
+Passenger <-> Driver chat   (Socket.IO through the Render proxy)
+User -> AI support          (tool calling, ownership boundary)
+```
+
+## Success criteria
+
+``` text
+[ ] deployed backend reachable
+[ ] authentication works
+[ ] driver flow works
+[ ] passenger flow works
+[ ] ride flow works
+[ ] booking works
+[ ] payment flow works, including a real provider webhook
+[ ] cancellation and refund work
+[ ] notifications work
+[ ] chat works
+[ ] AI support works
+[ ] PostgreSQL + PostGIS work
+[ ] Redis works
+[ ] BullMQ works
+[ ] rate limiting works
+[ ] CORS works
+[ ] WebSocket works
+[ ] external integrations work where applicable
+[ ] no critical regression versus local Phase 15 verification
+```
+
+## Status: not started
+
+Blocked on Phase 16. Phase 17 cannot begin until there is a deployment to
+verify.
 
 ------------------------------------------------------------------------
 
@@ -2752,13 +3304,61 @@ Claude must maintain this checklist.
 [x] Phase 13 — Chat
 [x] Phase 13.5 — AI Support Chatbot
 [x] Phase 14 — Security
-[ ] Phase 15 — Testing + Hardening
-[ ] Phase 16 — Production Deployment Preparation
-[ ] Phase 17 — Final Integration
+[x] Phase 15 — Verification + Hardening
+[ ] Phase 16 — Render + Supabase + Upstash Deployment   <-- NEXT
+[ ] Phase 17 — Final Deployed Integration
 ```
 
 Update this checklist only after the phase actually passes its
 verification criteria.
+
+------------------------------------------------------------------------
+
+# 22a. Future Scope
+
+Work that is deliberately **not** part of the current milestone. Listed here
+so it is tracked rather than forgotten, and so nobody mistakes its absence for
+an oversight.
+
+## Ratings
+
+``` text
+status   future scope --- not implemented, not scheduled
+```
+
+There is no `Rating` entity, no rating endpoint, and no write path.
+`users.rating_average` / `rating_count` exist on the schema and are consumed
+by the fare strategy (§29's bounded rating multiplier) and returned in ride
+search results, but nothing ever writes them. The practical effect today:
+
+``` text
+every driver's rating multiplier resolves to its neutral default
+unrated drivers sort last in DRIVER_RATING order (COALESCE(rating_average, 6))
+```
+
+Both behaviors are correct for an unrated population. Implementing ratings
+later is additive --- a table, a write path after ride completion, and an
+aggregate update --- and needs no change to fare, search or settlement, which
+already read the columns.
+
+## Automated test infrastructure
+
+Phase 15 was completed by manual/runtime verification (§19). A persistent
+automated suite --- unit, integration, API, concurrency, failure-injection ---
+remains future technical hardening, and is what would protect the verified
+behavior against future regressions.
+
+## Structured logging and OpenAPI
+
+The codebase logs through `console.*` and has no generated API specification.
+Both were noted as outstanding in earlier phases and remain so.
+
+## AWS production infrastructure
+
+ECS Fargate, RDS PostgreSQL + PostGIS, ElastiCache Redis and a load balancer
+are the future production target (claude.md §65). The current milestone
+deploys to Render + Supabase + Upstash instead. Containerization belongs to
+that future scope, which is why Phase 16 requires no Dockerfile.
 
 ------------------------------------------------------------------------
 

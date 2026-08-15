@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 
 import { processNotificationJob } from '../../modules/notification/services/notificationService.js';
 import type { NotificationJobData } from '../../modules/notification/services/notificationService.js';
-import { createQueueConnection } from './connection.js';
+import { createQueueConnection, workerPollingOptions } from './connection.js';
 import { NOTIFICATION_QUEUE_NAME } from './queues.js';
 
 export const notificationWorker = new Worker<NotificationJobData>(
@@ -12,7 +12,7 @@ export const notificationWorker = new Worker<NotificationJobData>(
   },
   // Dedicated connection: a Worker's blocking commands must not share a
   // socket with other Workers (see connection.ts).
-  { connection: createQueueConnection('notification-worker') },
+  { connection: createQueueConnection('notification-worker'), ...workerPollingOptions },
 );
 
 notificationWorker.on('failed', (job, err) => {

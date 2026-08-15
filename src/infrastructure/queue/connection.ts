@@ -47,6 +47,14 @@ export function createQueueConnection(label: string): Redis {
 // Shared by the Queue instances only — never by a Worker.
 export const queueConnection = createQueueConnection('queues');
 
+// Shared by all three Workers so their polling cost stays uniform and is
+// tuned in one place. `connection` is deliberately NOT included — each Worker
+// must supply its own (see above).
+export const workerPollingOptions = {
+  drainDelay: env.QUEUE_DRAIN_DELAY_SECONDS,
+  stalledInterval: env.QUEUE_STALLED_INTERVAL_SECONDS * 1000,
+} as const;
+
 export async function closeQueueConnections(): Promise<void> {
   await Promise.all(
     pool.map((connection) =>

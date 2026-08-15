@@ -164,6 +164,22 @@ const envSchema = z.object({
   // delayed job releases it.
   BOOKING_PAYMENT_TTL_SECONDS: z.coerce.number().int().positive().default(900),
 
+  // BullMQ worker polling, tuned for command-metered hosted Redis.
+  //
+  // A Worker waits on a blocking BZPOPMIN and re-issues it every
+  // `drainDelay` seconds, plus a delayed-job check and a stalled-job sweep.
+  // At BullMQ's defaults (drainDelay 5s, stalledInterval 30s) three workers
+  // cost ~344 commands/minute — about 495k/day — with the application
+  // completely idle. Providers that meter per command bill that as real
+  // traffic (steps.md §20).
+  //
+  // Raising these does NOT delay ordinary jobs: BZPOPMIN wakes the moment a
+  // job is pushed, so enqueue-to-processing latency is unchanged. The real
+  // trade-off is stalled-job recovery — if a worker dies mid-job, its job is
+  // reclaimed after up to QUEUE_STALLED_INTERVAL_SECONDS instead of 30s.
+  QUEUE_DRAIN_DELAY_SECONDS: z.coerce.number().int().positive().default(60),
+  QUEUE_STALLED_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
+
   // Consumed starting Phase 6 (HeuristicFareStrategy, claude.md §29). All
   // values configurable rather than hard-coded, per §29's "avoid uncontrolled
   // multipliers" requirement.

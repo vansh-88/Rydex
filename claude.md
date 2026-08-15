@@ -4632,3 +4632,79 @@ regardless of the drift.*
     a non-existent service account logs `app/invalid-credential` and is retried
     by BullMQ. Notification rows persist in every case, so the in-app
     notification centre is unaffected by delivery failure (§46).
+
+### 2026-08-17 (Verification follow-up: error mapping, Redis resilience, suspension)
+
+-   **`errorHandler` mapped every non-`AppError` to 500, which was one cause
+    behind four separate defects**: malformed JSON on any endpoint, a body over
+    the 1MB limit, an upload over the 5MB limit (`MulterError`), and a webhook
+    posted with a non-JSON content type all answered
+    `500 INTERNAL_ERROR`. Each of those is the caller's mistake and carries its
+    own correct status, which was being discarded — and every one of them
+    inflated the 5xx rate with client errors. They now map to `INVALID_JSON`
+    (400), `PAYLOAD_TOO_LARGE` (413), `FILE_TOO_LARGE` (413) and
+    `INVALID_WEBHOOK_PAYLOAD` (400). As a side effect `webhookService`'s own
+    `INVALID_WEBHOOK_PAYLOAD` branch stopped being unreachable dead code.
+-   **5xx `AppError`s are now logged with their `cause`.** 4xx stays quiet (it
+    is the caller's problem); a 5xx is ours, and previously a `502`
+    reached the client with the provider's actual failure discarded
+    server-side. This is what makes `AppError`'s `cause` worth attaching, and
+    `GeoapifyMapProvider`'s bare `catch {}` — which threw away the only
+    evidence of why a transient failure lost a ride creation — now attaches it.
+-   **The Redis client had no command timeout, so an outage hung requests
+    rather than failing them.** ioredis buffers commands while disconnected
+    (`enableOfflineQueue`), and only the rate limiter raced its own deadline.
+    Everything else inherited the hang: `/ready` blocked past 10s instead of
+    answering `503 REDIS_UNAVAILABLE` — the readiness probe failing in exactly
+    the scenario it exists for — and every OTP request held a connection open
+    for the duration. A `commandTimeout` on the shared client fixes it
+    centrally: `/ready` now answers 503 in ~2s, OTP fails closed with
+    `503 SERVICE_UNAVAILABLE`, and rate limiting still fails *open* as designed.
+    BullMQ is unaffected (separate connection, blocking commands are meant to
+    wait). Disabling the offline queue outright would have been the wrong fix —
+    it also breaks the normal reconnect window.
+-   **`users.status` was read nowhere in the codebase**, so `SUSPENDED` was
+    decorative: a suspended account could log in, refresh, and call every
+    endpoint. Enforced now at the two points a session is *granted* — OTP
+    verification and refresh-token rotation — rather than in `authenticate`.
+    That is deliberate and follows §8/§10: access tokens are stateless and
+    short-lived, and role changes already work this way, so suspension takes
+    effect within one 15-minute token lifetime without adding a database read
+    to every authenticated request. The refresh path checks inside the existing
+    rotation transaction (the user row is already joined there) and revokes the
+    whole token family atomically. Not enforced on request-otp, which would
+    confirm an address has an account and reintroduce the §9 enumeration leak.
+    No suspend/unsuspend endpoint was added — §6 keeps a blocked-user system
+    out of scope, so status is set directly, exactly like ADMIN provisioning.
+-   **Socket.IO CORS was configured from the raw `CORS_ORIGIN` string** while
+    Express used the parsed `corsOrigins` array. With more than one origin
+    configured it emitted the whole comma-separated list as a single
+    `Access-Control-Allow-Origin`, which is not a legal header value — so
+    WebSocket chat broke for *every* origin the moment a second one was added,
+    while the REST API kept working.
+-   **Rate limiting was opt-in per router**, leaving the entire admin module,
+    the notification endpoints and chat history with no limit at all, and any
+    new router unprotected by default. Added a deliberately generous shared
+    `authenticatedReadLimit` for authenticated endpoints that don't warrant
+    their own bucket.
+-   **Support tool results shipped raw service DTOs to the model**, meaning
+    every ride lookup pushed `routeGeometry` — the full route coordinate list —
+    into the LLM context, along with the driver's `postingCommissionAmount`.
+    Projections trim tool output to the fields a support answer is phrased
+    from: `getRideStatus` went from ~10,000 characters to 335 (§96.5 cost
+    control). The ownership-checked service calls are unchanged.
+-   **Shutdown never released anything.** No `prisma.$disconnect()`, no
+    `redis.quit()`, no queue `close()`, no timeout, and no
+    `unhandledRejection`/`uncaughtException` handlers anywhere — an unhandled
+    rejection in a worker killed the process with nothing but a stack trace.
+    All added, with a 10s force-exit so a stuck keep-alive can't hang the
+    process, plus an `EADDRINUSE` message instead of a raw unhandled 'error'.
+-   **Validation errors now name the failing field.** A ride creation missing
+    four coordinates previously answered "expected number, received undefined"
+    four times with no indication of which fields.
+-   **Deliberately not changed:** refreshing after logout still returns
+    `REFRESH_TOKEN_REUSE_DETECTED`. The wording is alarming for a normal
+    logout, but the server genuinely cannot distinguish a logged-out token from
+    a stolen one, and treating that presentation as suspicious is the correct
+    security posture. Softening the code would weaken a real control to improve
+    a message.

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
+import { authenticatedReadLimit } from '../../app/middleware/rateLimits.js';
 import { authorize } from '../../app/middleware/authorize.js';
 import {
   idParamSchema,
@@ -17,7 +18,7 @@ export const adminRouter = Router();
 
 // claude.md §96: every admin route requires ADMIN — never reachable by
 // DRIVER/PASSENGER.
-adminRouter.use(authenticate, authorize('ADMIN'));
+adminRouter.use(authenticate, authorize('ADMIN'), authenticatedReadLimit);
 
 adminRouter.get('/driver-applications', adminDriverApplicationController.list);
 

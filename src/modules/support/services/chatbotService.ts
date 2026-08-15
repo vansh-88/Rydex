@@ -1,6 +1,11 @@
 import { env } from '../../../config/env.js';
 import { aiProvider, aiProviderName } from '../../../infrastructure/ai/index.js';
-import type { AIMessage, AIToolCall } from '../../../infrastructure/ai/aiProvider.js';
+import type {
+  AICompletionRequest,
+  AICompletionResult,
+  AIMessage,
+  AIToolCall,
+} from '../../../infrastructure/ai/aiProvider.js';
 import { AppError } from '../../../shared/errors/AppError.js';
 import { buildSystemPrompt } from '../prompts/systemPrompt.js';
 import * as supportRepository from '../repositories/supportRepository.js';
@@ -89,23 +94,32 @@ async function buildContext(conversationId: string): Promise<AIMessage[]> {
 // userId ever taken from the model) and fed back, then the loop tries
 // again — capped at SUPPORT_CHAT_MAX_TOOL_ROUNDS so a confused model can't
 // spiral into unbounded provider calls (claude.md §13 bounded retries).
+async function completeOrRecordFailure(
+  conversationId: string,
+  request: AICompletionRequest,
+): Promise<AICompletionResult> {
+  try {
+    return await aiProvider.complete(request);
+  } catch (err) {
+    await supportRepository.createMessage({
+      conversationId,
+      role: 'ASSISTANT',
+      status: 'FAILED',
+      errorCode: err instanceof AppError ? err.code : 'AI_PROVIDER_ERROR',
+      provider: aiProviderName,
+    });
+    throw err;
+  }
+}
+
 async function runTurn(conversationId: string, userId: string): Promise<SupportMessageDto> {
   const context = await buildContext(conversationId);
 
   for (let round = 0; round < env.SUPPORT_CHAT_MAX_TOOL_ROUNDS; round += 1) {
-    let result;
-    try {
-      result = await aiProvider.complete({ messages: context, tools: SUPPORT_TOOL_DEFINITIONS });
-    } catch (err) {
-      await supportRepository.createMessage({
-        conversationId,
-        role: 'ASSISTANT',
-        status: 'FAILED',
-        errorCode: err instanceof AppError ? err.code : 'AI_PROVIDER_ERROR',
-        provider: aiProviderName,
-      });
-      throw err;
-    }
+    const result = await completeOrRecordFailure(conversationId, {
+      messages: context,
+      tools: SUPPORT_TOOL_DEFINITIONS,
+    });
 
     const usageFields = result.usage
       ? { promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens }
@@ -153,15 +167,43 @@ async function runTurn(conversationId: string, userId: string): Promise<SupportM
     }
   }
 
-  // Exceeded the bounded round count without a final text answer.
-  await supportRepository.createMessage({
+  // The tool-round budget is spent. Previously this threw
+  // AI_PROVIDER_ERROR — which made every question needing the full budget
+  // fail, and blamed the provider for what was really our own cap. Note the
+  // loop above runs SUPPORT_CHAT_MAX_TOOL_ROUNDS *tool* rounds, so answering
+  // needs one more completion than that: with the default of 2, "what's the
+  // status of my booking, and of its ride?" spent both rounds on
+  // getMyRecentBookings + getRideStatus and never got a turn to write the
+  // answer it already had the data for.
+  //
+  // So: one last completion with the tools withheld. The model cannot request
+  // another call and must answer from the tool results already in context,
+  // which is exactly the graceful degradation this path should have had.
+  const final = await completeOrRecordFailure(conversationId, { messages: context });
+
+  if (final.content === null) {
+    await supportRepository.createMessage({
+      conversationId,
+      role: 'ASSISTANT',
+      status: 'FAILED',
+      errorCode: 'AI_PROVIDER_ERROR',
+      provider: aiProviderName,
+      model: final.model,
+    });
+    throw new AppError(502, 'AI_PROVIDER_ERROR', 'The assistant could not produce a response');
+  }
+
+  const saved = await supportRepository.createMessage({
     conversationId,
     role: 'ASSISTANT',
-    status: 'FAILED',
-    errorCode: 'AI_PROVIDER_ERROR',
+    content: final.content,
     provider: aiProviderName,
+    model: final.model,
+    ...(final.usage
+      ? { promptTokens: final.usage.promptTokens, completionTokens: final.usage.completionTokens }
+      : {}),
   });
-  throw new AppError(502, 'AI_PROVIDER_ERROR', 'The assistant could not produce a response');
+  return toMessageDto(saved);
 }
 
 async function getOwnedConversationOrThrow(

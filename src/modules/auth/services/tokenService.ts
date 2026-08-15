@@ -87,6 +87,7 @@ type RotationResult =
   | { kind: 'not-found' }
   | { kind: 'reuse' }
   | { kind: 'expired' }
+  | { kind: 'suspended' }
   | { kind: 'success'; accessToken: string; refreshToken: string };
 
 // claude.md §11: rotation on every refresh, and reuse of an already-revoked
@@ -123,6 +124,19 @@ export async function rotateRefreshToken(presentedToken: string): Promise<Rotate
       return { kind: 'expired' };
     }
 
+    // `users.status` was previously read nowhere, so a suspended account could
+    // refresh forever. Checked here, inside the rotation transaction, because
+    // this row already joins the user — no extra query, and the whole family
+    // is revoked atomically with the refusal rather than after a replacement
+    // token has already been handed out.
+    if (existing.user.status === 'SUSPENDED') {
+      await tx.refreshToken.updateMany({
+        where: { userId: existing.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return { kind: 'suspended' };
+    }
+
     await tx.refreshToken.update({
       where: { id: existing.id },
       data: { revokedAt: new Date() },
@@ -157,6 +171,8 @@ export async function rotateRefreshToken(presentedToken: string): Promise<Rotate
       );
     case 'expired':
       throw new AppError(401, 'REFRESH_TOKEN_EXPIRED', 'Session expired. Please log in again.');
+    case 'suspended':
+      throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended.');
     case 'success':
       return { accessToken: result.accessToken, refreshToken: result.refreshToken };
   }

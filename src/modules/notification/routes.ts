@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
+import { authenticatedReadLimit } from '../../app/middleware/rateLimits.js';
 import { idParamSchema, validateParams, validateQuery } from '../../app/middleware/validate.js';
 import * as notificationController from './controllers/notificationController.js';
 import { listNotificationsQuerySchema } from './schemas/notificationSchemas.js';
@@ -11,6 +12,7 @@ import { listNotificationsQuerySchema } from './schemas/notificationSchemas.js';
 export const notificationRouter = Router();
 
 notificationRouter.use(authenticate);
+notificationRouter.use(authenticatedReadLimit);
 
 // Scoped to the caller's own notifications in the service layer
 // (notificationRepository.listByUser/markRead both filter by userId) — no

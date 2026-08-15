@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
+import { authenticatedReadLimit } from '../../app/middleware/rateLimits.js';
 import { idParamSchema, validateParams, validateQuery } from '../../app/middleware/validate.js';
 import * as chatController from './controllers/chatController.js';
 import { listConversationsQuerySchema, listMessagesQuerySchema } from './schemas/chatSchemas.js';
@@ -14,6 +15,7 @@ import { listConversationsQuerySchema, listMessagesQuerySchema } from './schemas
 export const chatRouter = Router();
 
 chatRouter.use(authenticate);
+chatRouter.use(authenticatedReadLimit);
 
 chatRouter.get('/', validateQuery(listConversationsQuerySchema), chatController.listConversations);
 chatRouter.get(

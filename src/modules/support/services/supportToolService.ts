@@ -59,6 +59,48 @@ function invalidArgsResult(message: string): ToolExecutionResult {
   return { content: JSON.stringify({ error: message }), isError: true };
 }
 
+// Tool results were previously the raw service DTOs, JSON-stringified whole.
+// For a ride that meant shipping `routeGeometry` — a MultiLineString of every
+// coordinate on the route, ~10KB of digits — into the model's context on each
+// lookup, which burns tokens and crowds the context window for data no support
+// answer can use (§96.5 Cost control). It also handed a passenger the driver's
+// `postingCommissionAmount`.
+//
+// These projections keep the ownership-checked service calls exactly as they
+// are and trim only what reaches the model: the fields a support answer is
+// actually phrased from.
+function toSupportRide(ride: Awaited<ReturnType<typeof rideService.getRide>>) {
+  return {
+    id: ride.id,
+    status: ride.status,
+    departureTime: ride.departureTime,
+    availableSeats: ride.availableSeats,
+    totalSeats: ride.totalSeats,
+    farePerSeat: ride.farePerSeat,
+    distanceMeters: ride.distanceMeters,
+    durationSeconds: ride.durationSeconds,
+    origin: { latitude: ride.origin.latitude, longitude: ride.origin.longitude, address: ride.origin.address },
+    destination: {
+      latitude: ride.destination.latitude,
+      longitude: ride.destination.longitude,
+      address: ride.destination.address,
+    },
+  };
+}
+
+function toSupportBooking(booking: Awaited<ReturnType<typeof bookingService.getBooking>>) {
+  return {
+    id: booking.id,
+    rideId: booking.rideId,
+    status: booking.status,
+    seatCount: booking.seatCount,
+    farePerSeat: booking.farePerSeat,
+    totalFare: booking.totalFare,
+    prepaidAmount: booking.prepaidAmount,
+    createdAt: booking.createdAt,
+  };
+}
+
 // claude.md §96.5: dispatches only to existing ownership-checked service
 // methods — never touches Prisma/SQL directly, never receives userId from
 // the model. A tool failure (bad arguments, not-found/not-owned) becomes a
@@ -74,7 +116,7 @@ export async function executeToolCall(
     switch (call.name) {
       case 'getMyRecentBookings': {
         const bookings = await bookingService.getMyRecentBookings(userId);
-        return { content: JSON.stringify(bookings), isError: false };
+        return { content: JSON.stringify(bookings.map(toSupportBooking)), isError: false };
       }
       case 'getBookingStatus': {
         const parsed = bookingIdArgsSchema.safeParse(call.arguments);
@@ -82,9 +124,11 @@ export async function executeToolCall(
           return invalidArgsResult('Missing or invalid bookingId');
         }
         const booking = await bookingService.getBooking(userId, parsed.data.bookingId);
-        return { content: JSON.stringify(booking), isError: false };
+        return { content: JSON.stringify(toSupportBooking(booking)), isError: false };
       }
       case 'getMyRecentRidesAsDriver': {
+        // Already a lean summary (RideSummaryDto — no geometry/coordinates),
+        // so it needs no projection.
         const rides = await rideService.getMyRecentRidesAsDriver(userId);
         return { content: JSON.stringify(rides), isError: false };
       }
@@ -94,7 +138,7 @@ export async function executeToolCall(
           return invalidArgsResult('Missing or invalid rideId');
         }
         const ride = await rideService.getRide(parsed.data.rideId);
-        return { content: JSON.stringify(ride), isError: false };
+        return { content: JSON.stringify(toSupportRide(ride)), isError: false };
       }
       default:
         return invalidArgsResult(`Unknown tool: ${call.name}`);

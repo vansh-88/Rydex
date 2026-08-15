@@ -89,6 +89,12 @@ const envSchema = z.object({
   BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // Cloudinary storage/bandwidth cost per upload.
+  // Catch-all limit for authenticated endpoints without their own bucket
+  // (admin, notifications, chat history). Deliberately generous — see
+  // app/middleware/rateLimits.ts.
+  AUTHENTICATED_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  AUTHENTICATED_READ_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+
   DOCUMENT_UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
   DOCUMENT_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 

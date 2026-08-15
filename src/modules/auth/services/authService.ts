@@ -1,3 +1,4 @@
+import type { UserStatus } from '../../../generated/prisma/enums.js';
 import { getUniqueConstraintFields } from '../../../infrastructure/database/prismaErrors.js';
 import { emailProvider } from '../../../infrastructure/email/index.js';
 import { AppError } from '../../../shared/errors/AppError.js';
@@ -70,6 +71,8 @@ export async function verifyOtpAndAuthenticate(
     }
   }
 
+  assertNotSuspended(user.status);
+
   const accessToken = tokenService.signAccessToken(user.id, user.role);
   const refreshToken = await tokenService.issueRefreshToken(user.id, input.deviceId);
 
@@ -87,6 +90,30 @@ export async function verifyOtpAndAuthenticate(
   };
 }
 
+// `users.status` existed but was read nowhere in the codebase: a SUSPENDED
+// user could log in, refresh, and call every endpoint normally, so there was
+// no working way to cut off an abusive account.
+//
+// Enforced at the two points where a session is *granted* (login and refresh)
+// rather than inside `authenticate`, deliberately. Access tokens are stateless
+// and short-lived by design (§10), and §8 already establishes that model for
+// role changes: an issued token isn't retroactively invalidated, the next
+// refresh re-reads the database. Checking here suspends an account within one
+// access-token lifetime (15 minutes) with no per-request database read;
+// checking in `authenticate` would add a DB round trip to every authenticated
+// request and contradict §10.
+//
+// Not enforced on request-otp: refusing there would confirm the address has an
+// account, which is exactly the enumeration leak §9 prohibits.
+function assertNotSuspended(status: UserStatus): void {
+  if (status === 'SUSPENDED') {
+    throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended.');
+  }
+}
+
+// Suspension on the refresh path is enforced inside
+// tokenService.rotateRefreshToken's transaction, where the user row is
+// already joined.
 export async function refreshSession(refreshToken: string): Promise<tokenService.RotatedSession> {
   return tokenService.rotateRefreshToken(refreshToken);
 }

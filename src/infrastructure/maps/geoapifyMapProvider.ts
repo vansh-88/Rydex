@@ -56,12 +56,24 @@ export class GeoapifyMapProvider implements MapProvider {
     let response: Response;
     try {
       response = await fetch(url, init);
-    } catch {
-      throw new AppError(502, 'MAP_PROVIDER_ERROR', 'Failed to reach the map provider');
+    } catch (err) {
+      // Was a bare `catch {}`, which discarded the only evidence of why the
+      // call failed. A transient network blip here fails ride creation
+      // outright, so the cause has to survive to the logs — note the URL is
+      // deliberately not included anywhere, since it carries the API key.
+      throw new AppError(502, 'MAP_PROVIDER_ERROR', 'Failed to reach the map provider', {
+        cause: err,
+      });
     }
 
     if (!response.ok) {
-      throw new AppError(502, 'MAP_PROVIDER_ERROR', `Map provider request failed with status ${response.status}`);
+      const detail = await response.text().catch(() => '');
+      throw new AppError(
+        502,
+        'MAP_PROVIDER_ERROR',
+        `Map provider request failed with status ${response.status}`,
+        { cause: new Error(detail.slice(0, 500)) },
+      );
     }
 
     return (await response.json()) as T;

@@ -13,3 +13,22 @@ export const documentUploadLimit = rateLimit({
   max: env.DOCUMENT_UPLOAD_RATE_LIMIT_MAX,
   keyFn: (req) => req.user!.id,
 });
+
+// claude.md §49 lists rate limiting per endpoint, but limits were opt-in per
+// router, so everything not explicitly named — the whole admin module, the
+// notification list/read endpoints, chat history — had no limit whatsoever,
+// and any newly added router inherited that by default.
+//
+// This is the catch-all for authenticated endpoints that aren't expensive
+// enough to deserve their own bucket (ride search, ride/booking creation and
+// support chat keep theirs). It is set high enough that normal use never
+// touches it: it exists so an authenticated client cannot hammer the database
+// without limit, not to shape traffic.
+//
+// Keyed per user, since every route it guards is behind `authenticate`.
+export const authenticatedReadLimit = rateLimit({
+  keyPrefix: 'authenticated-read-user',
+  windowSeconds: env.AUTHENTICATED_READ_RATE_LIMIT_WINDOW_SECONDS,
+  max: env.AUTHENTICATED_READ_RATE_LIMIT_MAX,
+  keyFn: (req) => req.user!.id,
+});

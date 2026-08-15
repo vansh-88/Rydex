@@ -3,6 +3,19 @@ import { z, type ZodType } from 'zod';
 
 import { AppError } from '../../shared/errors/AppError.js';
 
+// Zod issue messages alone don't say which field failed, so a request missing
+// four numbers answered "expected number, received undefined" four times over
+// with no way to tell which. Prefixing the path makes the response actionable
+// for an API consumer without exposing anything internal.
+function formatIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.join('.');
+      return path.length > 0 ? `${path}: ${issue.message}` : issue.message;
+    })
+    .join('; ');
+}
+
 declare module 'express-serve-static-core' {
   interface Request {
     // Express 5 makes `req.query` a getter-only property, so a validated/
@@ -21,7 +34,7 @@ export function validateBody<T>(schema: ZodType<T>) {
         new AppError(
           400,
           'VALIDATION_ERROR',
-          result.error.issues.map((issue) => issue.message).join('; '),
+          formatIssues(result.error),
         ),
       );
       return;
@@ -41,7 +54,7 @@ export function validateQuery<T>(schema: ZodType<T>) {
         new AppError(
           400,
           'VALIDATION_ERROR',
-          result.error.issues.map((issue) => issue.message).join('; '),
+          formatIssues(result.error),
         ),
       );
       return;
@@ -77,7 +90,7 @@ export function validateParams<T>(schema: ZodType<T>) {
         new AppError(
           400,
           'VALIDATION_ERROR',
-          result.error.issues.map((issue) => issue.message).join('; '),
+          formatIssues(result.error),
         ),
       );
       return;

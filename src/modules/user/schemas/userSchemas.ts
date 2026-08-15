@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// Unknown keys (role, status, ratingAverage, ratingCount, ...) are stripped
+// Unknown keys (role, status, driverRatingAverage, driverRatingCount, ...) are stripped
 // by default zod object parsing — the client cannot smuggle server-controlled
 // fields through this schema (claude.md §53).
 export const updateProfileSchema = z

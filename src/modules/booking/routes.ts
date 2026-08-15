@@ -1,7 +1,10 @@
 import { Router } from 'express';
 
 import { authenticate } from '../../app/middleware/authenticate.js';
-import { idParamSchema, validateParams } from '../../app/middleware/validate.js';
+import { authenticatedReadLimit } from '../../app/middleware/rateLimits.js';
+import { idParamSchema, validateBody, validateParams } from '../../app/middleware/validate.js';
+import * as ratingController from '../rating/controllers/ratingController.js';
+import { submitRatingSchema } from '../rating/schemas/ratingSchemas.js';
 import * as bookingController from './controllers/bookingController.js';
 
 // POST /rides/:id/bookings lives on rideRouter (src/modules/ride/routes.ts)
@@ -15,3 +18,26 @@ bookingRouter.use(authenticate);
 // service layer, same reasoning as vehicleRouter/rideRouter — no role gate.
 bookingRouter.get('/:id', validateParams(idParamSchema), bookingController.getById);
 bookingRouter.post('/:id/cancel', validateParams(idParamSchema), bookingController.cancel);
+
+// Ratings are rooted at the booking because a booking is exactly the unit two
+// people shared a trip through — which is what makes "one rating per
+// participant per trip" expressible as a unique constraint. The rating module
+// owns the logic; this is routing wiring only, the same arrangement rideRouter
+// already uses for booking creation.
+//
+// Which direction a rating goes (passenger→driver or driver→passenger) is
+// derived from the authenticated caller in ratingService, never sent by the
+// client — so one endpoint serves both.
+bookingRouter.post(
+  '/:id/ratings',
+  authenticatedReadLimit,
+  validateParams(idParamSchema),
+  validateBody(submitRatingSchema),
+  ratingController.submit,
+);
+bookingRouter.get(
+  '/:id/ratings',
+  authenticatedReadLimit,
+  validateParams(idParamSchema),
+  ratingController.list,
+);

@@ -90,7 +90,8 @@ export async function createRide(
   const fare = calculateFare({
     distanceMeters: route.distanceMeters,
     vehicleType: vehicle.vehicleType,
-    driverRatingAverage: driver.ratingAverage === null ? null : driver.ratingAverage.toNumber(),
+    driverRatingAverage:
+      driver.driverRatingAverage === null ? null : driver.driverRatingAverage.toNumber(),
   });
 
   const postingCommissionAmount = calculatePostingCommission(

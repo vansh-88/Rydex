@@ -64,8 +64,8 @@ function toRideSearchRow(row: RideSearchRowRaw): RideSearchRow {
   };
 }
 
-// A driver with no ratings yet (`rating_average IS NULL`) sorts as if rated
-// just above the 1-5 range, matching Postgres's own ASC-sorts-NULLS-LAST
+// A driver with no ratings yet (`driver_rating_average IS NULL`) sorts as if
+// rated just above the 1-5 range, matching Postgres's own ASC-sorts-NULLS-LAST
 // default while keeping the keyset comparison below total (no NULLs in the
 // compared tuple — row comparison with a NULL operand doesn't behave as a
 // simple total order).
@@ -85,7 +85,7 @@ function sortExpression(sort: RideSortOption, pickupPoint: Prisma.Sql, destinati
     case 'FARE':
       return Prisma.sql`r.fare_per_seat`;
     case 'DRIVER_RATING':
-      return Prisma.sql`COALESCE(u.rating_average, ${UNRATED_DRIVER_RATING_SENTINEL})`;
+      return Prisma.sql`COALESCE(u.driver_rating_average, ${UNRATED_DRIVER_RATING_SENTINEL})`;
   }
 }
 
@@ -127,7 +127,7 @@ export async function search(params: SearchRidesParams): Promise<RideSearchRow[]
       r.fare_per_seat,
       ST_Distance(r.origin, ${pickupPoint}) AS pickup_distance_meters,
       ST_Distance(r.destination, ${destinationPoint}) AS destination_distance_meters,
-      u.id AS driver_id, u.name AS driver_name, u.rating_average AS driver_rating_average,
+      u.id AS driver_id, u.name AS driver_name, u.driver_rating_average,
       v.vehicle_type, v.model AS vehicle_model, v.is_ac AS vehicle_is_ac
     FROM rides r
     JOIN vehicles v ON v.id = r.vehicle_id

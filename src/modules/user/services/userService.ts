@@ -12,8 +12,10 @@ export interface UserProfile {
   profileImageUrl: string | null;
   role: string;
   status: string;
-  ratingAverage: number | null;
-  ratingCount: number;
+  driverRatingAverage: number | null;
+  driverRatingCount: number;
+  passengerRatingAverage: number | null;
+  passengerRatingCount: number;
   driverLicenseStatus: string;
   driverLicenseRejectionReason: string | null;
   createdAt: Date;
@@ -28,8 +30,10 @@ function toUserProfile(user: {
   profileImageUrl: string | null;
   role: string;
   status: string;
-  ratingAverage: Prisma.Decimal | null;
-  ratingCount: number;
+  driverRatingAverage: Prisma.Decimal | null;
+  driverRatingCount: number;
+  passengerRatingAverage: Prisma.Decimal | null;
+  passengerRatingCount: number;
   driverLicenseStatus: string;
   driverLicenseRejectionReason: string | null;
   createdAt: Date;
@@ -43,8 +47,12 @@ function toUserProfile(user: {
     profileImageUrl: user.profileImageUrl,
     role: user.role,
     status: user.status,
-    ratingAverage: user.ratingAverage === null ? null : user.ratingAverage.toNumber(),
-    ratingCount: user.ratingCount,
+    driverRatingAverage:
+      user.driverRatingAverage === null ? null : user.driverRatingAverage.toNumber(),
+    driverRatingCount: user.driverRatingCount,
+    passengerRatingAverage:
+      user.passengerRatingAverage === null ? null : user.passengerRatingAverage.toNumber(),
+    passengerRatingCount: user.passengerRatingCount,
     driverLicenseStatus: user.driverLicenseStatus,
     driverLicenseRejectionReason: user.driverLicenseRejectionReason,
     createdAt: user.createdAt,

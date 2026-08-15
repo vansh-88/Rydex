@@ -169,6 +169,18 @@ enum DevicePlatform {
   @@map("device_platform")
 }
 
+// Which role the *ratee* was being rated in — a passenger rating their driver
+// produces DRIVER, a driver rating one of their passengers produces PASSENGER.
+// Derivable from raterId, but stored so the (ratee_id, ratee_role) index is
+// usable and a row reads independently, same denormalisation reasoning as
+// SupportMessage.toolName.
+enum RatingRole {
+  DRIVER
+  PASSENGER
+
+  @@map("rating_role")
+}
+
 // claude.md §44: the fixed initial set of notification types.
 enum NotificationType {
   RIDE_BOOKED
@@ -271,9 +283,15 @@ model User {
   role            UserRole
   status          UserStatus @default(ACTIVE)
 
-  // Nullable: null means "no ratings yet", distinct from a low average.
-  ratingAverage Decimal? @map("rating_average") @db.Decimal(3, 2)
-  ratingCount   Int      @default(0) @map("rating_count")
+  // Reputation is role-scoped: a single average cannot mean both "good driver"
+  // and "good passenger", and the fare multiplier (§29) and DRIVER_RATING
+  // search sort (§25) must read the driver figure specifically. Nullable
+  // averages mean "no ratings yet", distinct from a low score — search sorts
+  // unrated drivers last via COALESCE rather than treating them as bad.
+  driverRatingAverage    Decimal? @map("driver_rating_average") @db.Decimal(3, 2)
+  driverRatingCount      Int      @default(0) @map("driver_rating_count")
+  passengerRatingAverage Decimal? @map("passenger_rating_average") @db.Decimal(3, 2)
+  passengerRatingCount   Int      @default(0) @map("passenger_rating_count")
 
   // claude.md §8/§96 (2026-08-11): how a PASSENGER becomes a DRIVER. The
   // license file itself is a UserDocument (documentType = DRIVING_LICENSE);
@@ -305,6 +323,8 @@ model User {
   conversationsAsPassenger Conversation[]        @relation("ConversationPassenger")
   messages                 Message[]
   supportConversations     SupportConversation[]
+  ratingsGiven             Rating[]              @relation("RatingRater")
+  ratingsReceived          Rating[]              @relation("RatingRatee")
 
   @@map("users")
 }
@@ -439,6 +459,7 @@ model Ride {
   payments      Payment[]
   transactions  Transaction[]
   conversations Conversation[]
+  ratings       Rating[]
 
   @@index([driverId])
   @@index([vehicleId])
@@ -492,10 +513,50 @@ model Booking {
   passenger    User          @relation(fields: [passengerId], references: [id], onDelete: Cascade)
   payments     Payment[]
   transactions Transaction[]
+  ratings      Rating[]
 
   @@index([rideId])
   @@index([passengerId])
   @@map("bookings")
+}
+
+// A rating is scoped to one booking, which is what makes "one rating per
+// participant per shared trip" expressible as a uniqueness constraint. Both
+// directions live in this one table: a passenger rating their driver and that
+// driver rating the passenger are two rows on the same booking with swapped
+// rater/ratee and different rateeRole.
+//
+// Ratings are immutable — there is no update or delete path. The aggregate on
+// `users` is maintained incrementally (ratingRepository.applyToAggregate), so
+// mutating a score after the fact would require recomputing it, and no
+// requirement asks for that.
+model Rating {
+  id        String     @id @default(uuid()) @db.Uuid
+  rideId    String     @map("ride_id") @db.Uuid
+  bookingId String     @map("booking_id") @db.Uuid
+  raterId   String     @map("rater_id") @db.Uuid
+  rateeId   String     @map("ratee_id") @db.Uuid
+  rateeRole RatingRole @map("ratee_role")
+
+  // 1-5, validated in Zod rather than by a DB CHECK — same reasoning as
+  // Payment's ride/booking exclusivity: Prisma doesn't model arbitrary CHECK
+  // constraints declaratively.
+  score   Int
+  comment String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ride    Ride    @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  rater   User    @relation("RatingRater", fields: [raterId], references: [id], onDelete: Cascade)
+  ratee   User    @relation("RatingRatee", fields: [rateeId], references: [id], onDelete: Cascade)
+
+  // Load-bearing: this is what makes double-rating impossible, and it is the
+  // database (not an application pre-check) that arbitrates two concurrent
+  // submissions — same pattern as idempotency_keys (user_id, key).
+  @@unique([bookingId, raterId])
+  @@index([rateeId, rateeRole])
+  @@map("ratings")
 }
 
 // claude.md §38: gateway-level payment attempt. Exactly one of

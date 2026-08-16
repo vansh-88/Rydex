@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { ApiError } from '@/api/client';
+import { ApiError, forceTokenRefresh } from '@/api/client';
 import * as authApi from '@/api/endpoints/auth';
 import { clearCache } from '@/api/store';
 import type { AuthTokens, UserProfile } from '@/api/types';
@@ -52,6 +52,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // React tree, so it announces the logout and this listener reacts.
   useEffect(() => tokenStore.onForcedLogout(clearSession), [clearSession]);
 
+  // The profile is read live from the database; the access token's `role`
+  // claim is a snapshot from when it was minted. When an admin approves a
+  // driver application those two disagree, and the stale claim is what the
+  // backend's authorize() actually enforces — so the user would be told they
+  // are a driver and then rejected from every driver action until the token
+  // expired. Refreshing mints a token carrying the new role immediately.
+  const reconcileRoleClaim = useCallback(async (profile: UserProfile) => {
+    const claimedRole = tokenStore.getAccessTokenRole();
+    if (claimedRole !== null && claimedRole !== profile.role) {
+      await forceTokenRefresh().catch(() => undefined);
+    }
+  }, []);
+
   // Restore the session on load. apiRequest transparently exchanges the
   // stored refresh token for a fresh access token before this call lands.
   useEffect(() => {
@@ -64,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (controller.signal.aborted) return;
         setUser(profile);
         setStatus('authenticated');
+        await reconcileRoleClaim(profile);
       } catch (error) {
         if (controller.signal.aborted) return;
         // A 401 here means the refresh token was expired or revoked, and
@@ -109,11 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     try {
-      setUser(await authApi.getMe());
+      const profile = await authApi.getMe();
+      setUser(profile);
+      await reconcileRoleClaim(profile);
     } catch {
       /* keep the existing profile — a failed refresh is not a logout */
     }
-  }, []);
+  }, [reconcileRoleClaim]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

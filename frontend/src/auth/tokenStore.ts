@@ -49,6 +49,31 @@ export const tokenStore = {
     }
   },
 
+  // The `role` claim baked into the current access token.
+  //
+  // This matters because the claim is a snapshot from when the token was
+  // minted, while the profile is read live from the database. An admin
+  // approving a driver application flips the role server-side, but the
+  // applicant's existing token keeps saying PASSENGER for up to its 15-minute
+  // lifetime — so `authorize('DRIVER')` would reject them from the very
+  // actions the app has just told them they can take. AuthProvider compares
+  // the two and forces a refresh when they disagree.
+  //
+  // Decoding is for display/comparison only. The token is signed and the
+  // backend verifies it; nothing here is trusted for access control.
+  getAccessTokenRole(): string | null {
+    if (accessToken === null) return null;
+    try {
+      const payload = accessToken.split('.')[1];
+      if (payload === undefined) return null;
+      const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+      const claims = JSON.parse(json) as { role?: unknown };
+      return typeof claims.role === 'string' ? claims.role : null;
+    } catch {
+      return null;
+    }
+  },
+
   // Lets AuthProvider react to a logout the API client decided on its own —
   // an expired or revoked refresh token is discovered mid-request, far from
   // any React tree.

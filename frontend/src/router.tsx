@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 
 import { AuthProvider } from '@/auth/AuthProvider';
 import { RequireAuth, RequireRole } from '@/auth/guards';
@@ -7,12 +7,19 @@ import { Home } from '@/routes/Home';
 import { KitchenSink } from '@/routes/KitchenSink';
 import { Login } from '@/routes/Login';
 import { NotFound } from '@/routes/NotFound';
+import { AdminLayout } from '@/routes/admin/AdminLayout';
+import { AdminVehicles } from '@/routes/admin/AdminVehicles';
+import { DriverApplications } from '@/routes/admin/DriverApplications';
+import { BecomeDriver } from '@/routes/BecomeDriver';
 import { BookRide } from '@/routes/BookRide';
 import { MyTrips } from '@/routes/MyTrips';
 import { Placeholder } from '@/routes/Placeholder';
+import { Profile } from '@/routes/Profile';
 import { RideDetail } from '@/routes/RideDetail';
 import { SearchResults } from '@/routes/SearchResults';
 import { TripDetail } from '@/routes/TripDetail';
+import { VehicleDetail } from '@/routes/VehicleDetail';
+import { Vehicles } from '@/routes/Vehicles';
 
 // One AuthProvider above everything, so login and the shell share a session
 // and a sign-in immediately updates the nav without a reload.
@@ -52,23 +59,30 @@ export const router = createBrowserRouter([
                 path: 'rides/:rideId/manage',
                 element: <Placeholder title="Manage ride" phase="Phase 8" />,
               },
-              {
-                path: 'become-a-driver',
-                element: <Placeholder title="Become a driver" phase="Phase 6" />,
-              },
-              { path: 'vehicles', element: <Placeholder title="My vehicles" phase="Phase 6" /> },
+              { path: 'become-a-driver', element: <BecomeDriver /> },
+              { path: 'vehicles', element: <Vehicles /> },
+              { path: 'vehicles/:vehicleId', element: <VehicleDetail /> },
               { path: 'messages', element: <Placeholder title="Messages" phase="Phase 9" /> },
               {
                 path: 'notifications',
                 element: <Placeholder title="Notifications" phase="Phase 10" />,
               },
               { path: 'help', element: <Placeholder title="Support" phase="Phase 10" /> },
-              { path: 'profile', element: <Placeholder title="Profile" phase="Phase 6" /> },
+              { path: 'profile', element: <Profile /> },
 
               {
                 path: 'admin',
                 element: <RequireRole role="ADMIN" />,
-                children: [{ index: true, element: <Placeholder title="Admin" phase="Phase 6" /> }],
+                children: [
+                  {
+                    element: <AdminLayout />,
+                    children: [
+                      { index: true, element: <Navigate to="/admin/driver-applications" replace /> },
+                      { path: 'driver-applications', element: <DriverApplications /> },
+                      { path: 'vehicles', element: <AdminVehicles /> },
+                    ],
+                  },
+                ],
               },
             ],
           },

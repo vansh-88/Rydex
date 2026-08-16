@@ -96,6 +96,14 @@ async function refreshAccessToken(): Promise<string> {
   return payload.data.accessToken;
 }
 
+// Exchanges the refresh token for a new access token even though the current
+// one has not expired. Used when the access token's claims are known to be
+// stale — an admin granting the driver role changes what the user may do, but
+// the old token keeps asserting the old role until it expires.
+export async function forceTokenRefresh(): Promise<void> {
+  await ensureFreshToken();
+}
+
 function ensureFreshToken(): Promise<string> {
   refreshInFlight ??= refreshAccessToken().finally(() => {
     refreshInFlight = null;

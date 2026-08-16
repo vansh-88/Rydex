@@ -65,3 +65,13 @@ export interface UpdateProfileInput {
 export function updateMe(input: UpdateProfileInput): Promise<UserProfile> {
   return apiRequest('/users/me', { method: 'PATCH', body: input });
 }
+
+// Submitting a driving licence is what starts the driver funnel. Approval is a
+// human admin action, so this only ever moves the status to PENDING.
+// Re-submitting after a rejection clears the previous decision.
+export function submitDriverApplication(file: File): Promise<{ driverLicenseStatus: string }> {
+  const formData = new FormData();
+  // Field name fixed by the backend's multer config.
+  formData.append('document', file);
+  return apiRequest('/users/me/driver-application', { method: 'POST', formData });
+}

@@ -205,6 +205,77 @@ export async function findRecentByDriverId(
   });
 }
 
+export interface RideListRow extends RideSummaryRow {
+  vehicle: { make: string; model: string; registrationNumber: string };
+  // Confirmed passengers only — PENDING_PAYMENT bookings are holding a seat
+  // on a 15-minute fuse and may never become real, so counting them would
+  // overstate who is actually coming.
+  confirmedBookingCount: number;
+}
+
+export interface RideListCursor {
+  value: string;
+  id: string;
+}
+
+// The driver half of "My Trips". Same Prisma-only approach as
+// findRecentByDriverId above — the `Unsupported` geography columns are
+// excluded, so no raw SQL is needed. Ordered by (departureTime, id): a total
+// order, which is what makes the keyset cursor stable.
+export async function listByDriverId(
+  driverId: string,
+  scope: 'upcoming' | 'past',
+  cursor: RideListCursor | null,
+  limit: number,
+  now: Date = new Date(),
+): Promise<RideListRow[]> {
+  const direction = scope === 'upcoming' ? 'asc' : 'desc';
+  const cursorDate = cursor ? new Date(cursor.value) : null;
+
+  const rows = await prisma.ride.findMany({
+    where: {
+      AND: [
+        { driverId },
+        { departureTime: scope === 'upcoming' ? { gte: now } : { lt: now } },
+        ...(cursor && cursorDate
+          ? [
+              {
+                OR: [
+                  {
+                    departureTime:
+                      direction === 'asc' ? { gt: cursorDate } : { lt: cursorDate },
+                  },
+                  {
+                    AND: [
+                      { departureTime: cursorDate },
+                      { id: direction === 'asc' ? { gt: cursor.id } : { lt: cursor.id } },
+                    ],
+                  },
+                ],
+              },
+            ]
+          : []),
+      ],
+    },
+    select: {
+      id: true,
+      originAddress: true,
+      destinationAddress: true,
+      departureTime: true,
+      availableSeats: true,
+      totalSeats: true,
+      farePerSeat: true,
+      status: true,
+      vehicle: { select: { make: true, model: true, registrationNumber: true } },
+      _count: { select: { bookings: { where: { status: 'CONFIRMED' } } } },
+    },
+    orderBy: [{ departureTime: direction }, { id: direction }],
+    take: limit,
+  });
+
+  return rows.map(({ _count, ...row }) => ({ ...row, confirmedBookingCount: _count.bookings }));
+}
+
 const CANCELLABLE_FROM: RideStatus[] = ['PENDING_PAYMENT', 'OPEN', 'FULL'];
 const STARTABLE_FROM: RideStatus[] = ['OPEN', 'FULL'];
 const COMPLETABLE_FROM: RideStatus[] = ['STARTED'];

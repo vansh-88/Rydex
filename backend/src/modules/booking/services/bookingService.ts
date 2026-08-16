@@ -4,6 +4,11 @@ import { paymentProvider, paymentProviderName } from '../../../infrastructure/pa
 import * as paymentRecordService from '../../payment/services/paymentRecordService.js';
 import * as rideRepository from '../../ride/repositories/rideRepository.js';
 import { AppError } from '../../../shared/errors/AppError.js';
+import {
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+  type TripScope,
+} from '../../../shared/pagination/keysetCursor.js';
 import * as notificationService from '../../notification/services/notificationService.js';
 import * as conversationService from '../../chat/services/conversationService.js';
 import * as bookingRepository from '../repositories/bookingRepository.js';
@@ -21,6 +26,13 @@ export interface BookingDto {
   farePerSeat: number;
   totalFare: number;
   prepaidAmount: number;
+  // claude.md §41: the passenger's client needs these to reopen checkout —
+  // the prepayment order while PENDING_PAYMENT, and the final-payment order
+  // that finalPaymentService creates once the ride is COMPLETED. Both are
+  // provider order ids, not secrets: they are useless without the provider
+  // key, and Razorpay Checkout requires the order id client-side anyway.
+  prepaymentOrderId: string | null;
+  finalPaymentOrderId: string | null;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -45,6 +57,8 @@ function toBookingDto(booking: BookingRecord): BookingDto {
     farePerSeat: booking.farePerSeat,
     totalFare: booking.totalFare,
     prepaidAmount: booking.prepaidAmount,
+    prepaymentOrderId: booking.prepaymentOrderId,
+    finalPaymentOrderId: booking.finalPaymentOrderId,
     status: booking.status,
     createdAt: booking.createdAt.toISOString(),
     updatedAt: booking.updatedAt.toISOString(),
@@ -168,6 +182,123 @@ const RECENT_BOOKINGS_LIMIT = 10;
 // claude.md §96.5: backs the support-chatbot tool getMyRecentBookings —
 // scoped to the authenticated passengerId only (never a parameter the
 // model/caller can widen), same ownership reasoning as getBooking above.
+// The trip-card shape: a booking plus just enough of its ride to render a row
+// without a follow-up fetch. Deliberately not the full RideDto — that carries
+// ~10KB of routeGeometry per ride, which has no place in a list response.
+export interface BookingWithRideDto extends BookingDto {
+  ride: {
+    id: string;
+    originAddress: string | null;
+    destinationAddress: string | null;
+    departureTime: string;
+    status: string;
+    driver: { id: string; name: string; rating: number | null };
+  };
+}
+
+function toBookingWithRideDto(row: bookingRepository.BookingWithRideRecord): BookingWithRideDto {
+  return {
+    ...toBookingDto(row),
+    ride: {
+      id: row.ride.id,
+      originAddress: row.ride.originAddress,
+      destinationAddress: row.ride.destinationAddress,
+      departureTime: row.ride.departureTime.toISOString(),
+      status: row.ride.status,
+      driver: {
+        id: row.ride.driver.id,
+        name: row.ride.driver.name,
+        rating: row.ride.driver.driverRatingAverage?.toNumber() ?? null,
+      },
+    },
+  };
+}
+
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 50;
+
+// claude.md §54: scoped to the caller's own bookings — passengerId comes from
+// the access token, never from the request, so there is no cross-user query
+// surface here.
+export async function listMyBookings(
+  passengerId: string,
+  scope: TripScope,
+  cursorRaw: string | undefined,
+  limitRaw: number | undefined,
+): Promise<{ items: BookingWithRideDto[]; nextCursor: string | null }> {
+  const limit = Math.min(limitRaw ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+  const cursor = cursorRaw !== undefined ? decodeKeysetCursor(cursorRaw) : null;
+
+  const rows = await bookingRepository.listByPassengerId(passengerId, scope, cursor, limit);
+  const items = rows.map(toBookingWithRideDto);
+
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    rows.length === limit && last
+      ? encodeKeysetCursor({ value: last.ride.departureTime.toISOString(), id: last.id })
+      : null;
+
+  return { items, nextCursor };
+}
+
+// The driver's view of one ride's passengers.
+export interface RideBookingDto {
+  id: string;
+  seatCount: number;
+  pickup: { latitude: number; longitude: number };
+  drop: { latitude: number; longitude: number };
+  totalFare: number;
+  prepaidAmount: number;
+  status: string;
+  createdAt: string;
+  passenger: {
+    id: string;
+    name: string;
+    rating: number | null;
+    // Pickup-coordination data, not directory data: released only once the
+    // passenger has actually paid and is really coming. A PENDING_PAYMENT
+    // booking is an unconfirmed 15-minute hold, and a CANCELLED one has no
+    // claim to the driver's attention at all — neither should hand out a
+    // phone number.
+    phone: string | null;
+  };
+}
+
+const PHONE_VISIBLE_FOR: string[] = ['CONFIRMED', 'COMPLETED'];
+
+// Driver-owner only. A non-owner (including a passenger on this very ride)
+// gets 404 rather than 403 — same "never leak existence" rule the rest of
+// this module follows.
+export async function listRideBookings(
+  driverId: string,
+  rideId: string,
+): Promise<{ items: RideBookingDto[] }> {
+  const ride = await rideRepository.findById(rideId);
+  if (!ride || ride.driverId !== driverId) {
+    throw new AppError(404, 'RIDE_NOT_FOUND', 'Ride not found');
+  }
+
+  const rows = await bookingRepository.listByRideId(rideId);
+  const items = rows.map((row) => ({
+    id: row.id,
+    seatCount: row.seatCount,
+    pickup: { latitude: row.pickupLat, longitude: row.pickupLng },
+    drop: { latitude: row.dropLat, longitude: row.dropLng },
+    totalFare: row.totalFare,
+    prepaidAmount: row.prepaidAmount,
+    status: row.status,
+    createdAt: row.createdAt.toISOString(),
+    passenger: {
+      id: row.passenger.id,
+      name: row.passenger.name,
+      rating: row.passenger.passengerRatingAverage?.toNumber() ?? null,
+      phone: PHONE_VISIBLE_FOR.includes(row.status) ? row.passenger.phone : null,
+    },
+  }));
+
+  return { items };
+}
+
 export async function getMyRecentBookings(passengerId: string): Promise<BookingDto[]> {
   const bookings = await bookingRepository.findRecentByPassengerId(
     passengerId,

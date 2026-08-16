@@ -25,3 +25,12 @@ export const createRideSchema = z.object({
   availableSeats: z.number().int().min(1).max(MAX_SEATS),
 });
 export type CreateRideInput = z.infer<typeof createRideSchema>;
+
+// `scope` drives both the departure-time filter and the sort direction, so
+// the two can never disagree — see shared/pagination/keysetCursor.ts.
+export const listMyRidesQuerySchema = z.object({
+  scope: z.enum(['upcoming', 'past']).default('upcoming'),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().optional(),
+});
+export type ListMyRidesQuery = z.infer<typeof listMyRidesQuerySchema>;

@@ -17,3 +17,14 @@ export const createBookingSchema = z.object({
   drop: coordinatesSchema.optional(),
 });
 export type CreateBookingInput = z.infer<typeof createBookingSchema>;
+
+// `scope` drives both the departure-time filter and the sort direction, so
+// the two can never disagree — see shared/pagination/keysetCursor.ts.
+// Defaults to `upcoming`: the trips a passenger still has to act on are the
+// ones worth returning when the client doesn't say.
+export const listBookingsQuerySchema = z.object({
+  scope: z.enum(['upcoming', 'past']).default('upcoming'),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().optional(),
+});
+export type ListBookingsQuery = z.infer<typeof listBookingsQuerySchema>;

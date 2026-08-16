@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { authenticate } from '../../app/middleware/authenticate.js';
 import { authorize } from '../../app/middleware/authorize.js';
 import { idempotency } from '../../app/middleware/idempotency.js';
+import { authenticatedReadLimit } from '../../app/middleware/rateLimits.js';
 import {
   idParamSchema,
   validateBody,
@@ -15,7 +16,7 @@ import * as bookingController from '../booking/controllers/bookingController.js'
 import { createBookingSchema } from '../booking/schemas/bookingSchemas.js';
 import * as rideController from './controllers/rideController.js';
 import { searchRidesQuerySchema } from './schemas/rideSearchSchemas.js';
-import { createRideSchema } from './schemas/rideSchemas.js';
+import { createRideSchema, listMyRidesQuerySchema } from './schemas/rideSchemas.js';
 
 export const rideRouter = Router();
 
@@ -75,9 +76,34 @@ rideRouter.get(
   rideController.search,
 );
 
+// The driver half of "My Trips" (the passenger half is GET /bookings).
+// Registered before GET /:id for the same reason /search is — Express would
+// otherwise match "mine" as the :id param. DRIVER-gated because a PASSENGER
+// has no rides by construction, so the honest response is 403 rather than an
+// empty list that implies the feature might one day fill up.
+rideRouter.get(
+  '/mine',
+  authorize('DRIVER'),
+  authenticatedReadLimit,
+  validateQuery(listMyRidesQuerySchema),
+  rideController.listMine,
+);
+
 // Any authenticated user (driver or passenger) can view ride details —
 // passengers need this before booking (Phase 9).
 rideRouter.get('/:id', validateParams(idParamSchema), rideController.getById);
+
+// The driver's passenger list for one ride. Ownership is enforced in
+// bookingService.listRideBookings (404 for anyone else, including this
+// ride's own passengers), so no role gate is needed here — same arrangement
+// as cancel/start/complete below. The booking module owns the logic; this is
+// routing wiring only, mirroring POST /:id/bookings.
+rideRouter.get(
+  '/:id/bookings',
+  authenticatedReadLimit,
+  validateParams(idParamSchema),
+  bookingController.listForRide,
+);
 
 rideRouter.post('/:id/cancel', validateParams(idParamSchema), rideController.cancel);
 rideRouter.post('/:id/start', validateParams(idParamSchema), rideController.start);

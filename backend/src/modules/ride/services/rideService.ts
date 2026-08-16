@@ -6,6 +6,11 @@ import * as paymentRepository from '../../payment/repositories/paymentRepository
 import * as transactionRepository from '../../payment/repositories/transactionRepository.js';
 import { scheduleRefund } from '../../payment/services/refundService.js';
 import { AppError } from '../../../shared/errors/AppError.js';
+import {
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+  type TripScope,
+} from '../../../shared/pagination/keysetCursor.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
 import * as bookingRepository from '../../booking/repositories/bookingRepository.js';
 import { cancelScheduledBookingExpiry } from '../../booking/services/bookingExpiryService.js';
@@ -171,6 +176,52 @@ export interface RideSummaryDto {
   totalSeats: number;
   farePerSeat: number;
   status: string;
+}
+
+// The driver's "My Trips" row: a summary plus the vehicle it runs on and how
+// many passengers have actually paid. Deliberately excludes routeGeometry
+// (~10KB per ride) and the origin/destination coordinates — a list row needs
+// neither, and fetching them would force this onto the raw-SQL path.
+export interface RideListDto extends RideSummaryDto {
+  vehicle: { make: string; model: string; registrationNumber: string };
+  confirmedBookingCount: number;
+}
+
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 50;
+
+// claude.md §54: scoped to the caller's own rides — driverId comes from the
+// access token, never the request.
+export async function listMyRides(
+  driverId: string,
+  scope: TripScope,
+  cursorRaw: string | undefined,
+  limitRaw: number | undefined,
+): Promise<{ items: RideListDto[]; nextCursor: string | null }> {
+  const limit = Math.min(limitRaw ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+  const cursor = cursorRaw !== undefined ? decodeKeysetCursor(cursorRaw) : null;
+
+  const rows = await rideRepository.listByDriverId(driverId, scope, cursor, limit);
+  const items: RideListDto[] = rows.map((row) => ({
+    id: row.id,
+    originAddress: row.originAddress,
+    destinationAddress: row.destinationAddress,
+    departureTime: row.departureTime.toISOString(),
+    availableSeats: row.availableSeats,
+    totalSeats: row.totalSeats,
+    farePerSeat: row.farePerSeat.toNumber(),
+    status: row.status,
+    vehicle: row.vehicle,
+    confirmedBookingCount: row.confirmedBookingCount,
+  }));
+
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    rows.length === limit && last
+      ? encodeKeysetCursor({ value: last.departureTime.toISOString(), id: last.id })
+      : null;
+
+  return { items, nextCursor };
 }
 
 const RECENT_RIDES_LIMIT = 10;

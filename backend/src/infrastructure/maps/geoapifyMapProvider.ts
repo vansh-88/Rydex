@@ -1,5 +1,12 @@
 import { AppError } from '../../shared/errors/AppError.js';
-import type { Address, Coordinates, DistanceMatrix, MapProvider, Route } from './mapProvider.js';
+import type {
+  Address,
+  Coordinates,
+  DistanceMatrix,
+  MapProvider,
+  PlaceSuggestion,
+  Route,
+} from './mapProvider.js';
 
 const GEOAPIFY_BASE_URL = 'https://api.geoapify.com/v1';
 
@@ -11,6 +18,19 @@ interface GeoapifyGeocodeResult {
 
 interface GeoapifyGeocodeResponse {
   results: GeoapifyGeocodeResult[];
+}
+
+interface GeoapifyAutocompleteResult {
+  place_id?: string;
+  name?: string;
+  city?: string;
+  formatted: string;
+  lat: number;
+  lon: number;
+}
+
+interface GeoapifyAutocompleteResponse {
+  results: GeoapifyAutocompleteResult[];
 }
 
 interface GeoapifyRoutingResponse {
@@ -106,6 +126,28 @@ export class GeoapifyMapProvider implements MapProvider {
       formattedAddress: result.formatted,
       coordinates: { latitude: result.lat, longitude: result.lon },
     };
+  }
+
+  // Geoapify's autocomplete endpoint, constrained to India — Rydex is
+  // India-only, and the filter both improves relevance and keeps a typo from
+  // suggesting the wrong continent. `format=json` gives the same flat
+  // `results` shape the geocode calls above already use.
+  async autocomplete(query: string, limit: number): Promise<PlaceSuggestion[]> {
+    const data = await this.request<GeoapifyAutocompleteResponse>(
+      `/geocode/autocomplete?text=${encodeURIComponent(query)}` +
+        `&format=json&limit=${limit}&filter=countrycode:in`,
+    );
+
+    return data.results.map((result) => ({
+      // place_id is Geoapify's own identifier; fall back to the coordinate
+      // pair so a result missing one still gets a stable React key.
+      id: result.place_id ?? `${result.lat},${result.lon}`,
+      // `name` is the bare place ("Connaught Place"); it is absent for
+      // results that are only an address, where the city is the best label.
+      name: result.name ?? result.city ?? result.formatted,
+      formattedAddress: result.formatted,
+      coordinates: { latitude: result.lat, longitude: result.lon },
+    }));
   }
 
   async getRoute(origin: Coordinates, destination: Coordinates, waypoints: Coordinates[] = []): Promise<Route> {

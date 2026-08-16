@@ -1,5 +1,5 @@
 import type { Prisma } from '../../../generated/prisma/client.js';
-import type { BookingStatus } from '../../../generated/prisma/enums.js';
+import type { BookingStatus, RideStatus } from '../../../generated/prisma/enums.js';
 import { prisma } from '../../../infrastructure/database/prismaClient.js';
 
 export interface CreateBookingInput {
@@ -103,6 +103,117 @@ export async function findRecentByPassengerId(
     take: limit,
   });
   return bookings.map(toBookingRecord);
+}
+
+// A booking on its own cannot render a trip card — it has no departure time,
+// no route and no driver, all of which live on the ride. Embedding a ride
+// summary here is what keeps the "my trips" list one query instead of one
+// query plus a GET /rides/:id per row.
+//
+// `ride.origin`/`ride.destination` are deliberately absent: they are the
+// `Unsupported` geography columns (claude.md §77) that would force this into
+// raw SQL, and a list row only needs the human-readable addresses. Same
+// reasoning as rideRepository.findRecentByDriverId.
+export interface BookingRideSummary {
+  id: string;
+  originAddress: string | null;
+  destinationAddress: string | null;
+  departureTime: Date;
+  status: RideStatus;
+  driver: { id: string; name: string; driverRatingAverage: Prisma.Decimal | null };
+}
+
+export interface BookingWithRideRecord extends BookingRecord {
+  ride: BookingRideSummary;
+}
+
+const RIDE_SUMMARY_SELECT = {
+  id: true,
+  originAddress: true,
+  destinationAddress: true,
+  departureTime: true,
+  status: true,
+  driver: { select: { id: true, name: true, driverRatingAverage: true } },
+} as const;
+
+export interface BookingListCursor {
+  value: string;
+  id: string;
+}
+
+// Ordered by the ride's departure time rather than the booking's createdAt:
+// "my trips" is a schedule, so the question is when the trip happens, not
+// when it was booked. The (departureTime, id) pair is a total order, which
+// is what makes the keyset cursor stable.
+export async function listByPassengerId(
+  passengerId: string,
+  scope: 'upcoming' | 'past',
+  cursor: BookingListCursor | null,
+  limit: number,
+  now: Date = new Date(),
+): Promise<BookingWithRideRecord[]> {
+  const direction = scope === 'upcoming' ? 'asc' : 'desc';
+  const cursorDate = cursor ? new Date(cursor.value) : null;
+
+  const rows = await prisma.booking.findMany({
+    where: {
+      AND: [
+        { passengerId },
+        { ride: { departureTime: scope === 'upcoming' ? { gte: now } : { lt: now } } },
+        ...(cursor && cursorDate
+          ? [
+              {
+                OR: [
+                  {
+                    ride: {
+                      departureTime:
+                        direction === 'asc' ? { gt: cursorDate } : { lt: cursorDate },
+                    },
+                  },
+                  {
+                    AND: [
+                      { ride: { departureTime: cursorDate } },
+                      { id: direction === 'asc' ? { gt: cursor.id } : { lt: cursor.id } },
+                    ],
+                  },
+                ],
+              },
+            ]
+          : []),
+      ],
+    },
+    include: { ride: { select: RIDE_SUMMARY_SELECT } },
+    orderBy: [{ ride: { departureTime: direction } }, { id: direction }],
+    take: limit,
+  });
+
+  return rows.map((row) => ({ ...toBookingRecord(row), ride: row.ride }));
+}
+
+export interface RideBookingRecord extends BookingRecord {
+  passenger: {
+    id: string;
+    name: string;
+    phone: string;
+    passengerRatingAverage: Prisma.Decimal | null;
+  };
+}
+
+// Every booking on a ride, for the driver's passenger list. Bounded by seat
+// capacity (max 20), so this is deliberately unpaginated — same reasoning as
+// GET /vehicles. Ordered oldest-first: the order people actually booked in.
+export async function listByRideId(rideId: string): Promise<RideBookingRecord[]> {
+  const rows = await prisma.booking.findMany({
+    where: { rideId },
+    include: {
+      passenger: {
+        select: { id: true, name: true, phone: true, passengerRatingAverage: true },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  return rows.map((row) => ({ ...toBookingRecord(row), passenger: row.passenger }));
 }
 
 export async function setPrepaymentOrderId(

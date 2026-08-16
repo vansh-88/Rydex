@@ -11,4 +11,12 @@ function createMapProvider(): MapProvider {
 
 export const mapProvider: MapProvider = createMapProvider();
 
-export type { Address, Coordinates, DistanceMatrix, DistanceMatrixCell, MapProvider, Route } from './mapProvider.js';
+export type {
+  Address,
+  Coordinates,
+  DistanceMatrix,
+  DistanceMatrixCell,
+  MapProvider,
+  PlaceSuggestion,
+  Route,
+} from './mapProvider.js';

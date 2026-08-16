@@ -318,11 +318,15 @@ POST  /api/v1/admin/vehicles/:id/verify · reject
 POST  /api/v1/vehicles          GET /api/v1/vehicles      GET/PATCH /api/v1/vehicles/:id
 POST  /api/v1/vehicles/:id/documents
 
+GET   /api/v1/places/autocomplete
+
 POST  /api/v1/rides             GET /api/v1/rides/search  GET /api/v1/rides/:id
+GET   /api/v1/rides/mine        GET /api/v1/rides/:id/bookings
 POST  /api/v1/rides/:id/cancel · start · complete
 POST  /api/v1/rides/:id/bookings
 
-GET   /api/v1/bookings/:id      POST /api/v1/bookings/:id/cancel
+GET   /api/v1/bookings          GET /api/v1/bookings/:id
+POST  /api/v1/bookings/:id/cancel
 GET   /api/v1/bookings/:id/ratings              POST /api/v1/bookings/:id/ratings
 
 GET   /api/v1/conversations     GET /api/v1/conversations/:id/messages

@@ -2,7 +2,7 @@ import type { RequestHandler } from 'express';
 
 import { sendSuccess } from '../../../shared/http/response.js';
 import type { SearchRidesQuery } from '../schemas/rideSearchSchemas.js';
-import type { CreateRideInput } from '../schemas/rideSchemas.js';
+import type { CreateRideInput, ListMyRidesQuery } from '../schemas/rideSchemas.js';
 import * as rideSearchService from '../services/rideSearchService.js';
 import * as rideService from '../services/rideService.js';
 
@@ -17,6 +17,14 @@ export const create: RequestHandler<unknown, unknown, CreateRideInput> = async (
 export const search: RequestHandler = async (req, res) => {
   const query = req.validatedQuery as SearchRidesQuery;
   const result = await rideSearchService.searchRides(query);
+  sendSuccess(res, result);
+};
+
+// Query is validated/coerced by validateQuery into req.validatedQuery
+// (see app/middleware/validate.ts — Express 5's req.query has no setter).
+export const listMine: RequestHandler = async (req, res) => {
+  const query = req.validatedQuery as ListMyRidesQuery;
+  const result = await rideService.listMyRides(req.user!.id, query.scope, query.cursor, query.limit);
   sendSuccess(res, result);
 };
 

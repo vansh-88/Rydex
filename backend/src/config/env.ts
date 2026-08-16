@@ -28,8 +28,15 @@ const envSchema = z.object({
   // NOT "on by default": with no proxy in front, trusting the header lets
   // any client spoof it and mint a fresh rate-limit bucket per request,
   // defeating the OTP brute-force protection entirely. Turn it on only once
-  // a load balancer that overwrites the header actually terminates traffic
-  // (Phase 16's ALB) — until then, false is the correct and safer value.
+  // a proxy that terminates traffic actually sits in front — until then,
+  // false is the correct and safer value.
+  //
+  // "True" here means "exactly one proxy hop", which app/app.ts translates
+  // into Express's `trust proxy` as the number 1. It must not become
+  // Express's boolean `true`: that trusts every hop and takes the leftmost,
+  // client-supplied X-Forwarded-For entry, which reintroduces the very
+  // spoofing this flag exists to stop (Render appends to the header rather
+  // than overwriting it). See the comment at app/app.ts's app.set call.
   TRUST_PROXY: envBoolean.default(false),
 
   // Consumed starting Phase 2 (Prisma/Postgres connection).

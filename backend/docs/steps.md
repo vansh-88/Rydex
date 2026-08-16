@@ -2572,6 +2572,45 @@ regardless of the drift.*
     and the file now re-asserts the two spatial indexes with
     `CREATE INDEX IF NOT EXISTS` as a backstop.
 
+### 2026-08-16 (Phase 17: `trust proxy` made a hop count — per-IP limits were bypassable)
+
+The first Phase 17 check against the deployment found that `TRUST_PROXY=true` did
+not yield real client IPs. It yielded **client-supplied** ones, which is worse
+than the failure the check was written to catch.
+
+-   **`app.set('trust proxy', true)` trusts every hop**, which makes `req.ip` the
+    *leftmost* `X-Forwarded-For` entry. Render **appends** to that header rather
+    than overwriting it, so what arrives is
+    `"<whatever the client sent>, <real client>"` and the attacker-supplied half
+    wins. Measured against `POST /api/v1/auth/refresh` (limit 60/3600s) by
+    reading the limiter's own `RateLimit-Remaining`: two calls with the same
+    spoofed header decremented 59 → 58, and a third call with a *different*
+    spoofed header reset to 59. Varying one header per request therefore mints an
+    unlimited number of rate-limit buckets.
+-   **Everything keyed on `req.ip` was affected**: OTP request flooding
+    (`OTP_REQUEST_IP_MAX`, also a Brevo-quota and email-bombing vector), OTP
+    verify brute force (`OTP_VERIFY_IP_MAX`), refresh-token grinding, and the
+    webhook ceiling. The per-user limits were never affected — they key on
+    `req.user.id`.
+-   **The env flag was right; the Express value it mapped to was not.** §11 and
+    the `TRUST_PROXY` comment already required `true` in production, and the
+    production guard already refused to boot without it. The bug was purely the
+    translation to Express, so the fix is a hop count:
+    `app.set('trust proxy', env.TRUST_PROXY ? 1 : false)`. Reproduced both
+    settings against a simulated Render header chain: with `true` the spoofed
+    address won, with `1` `req.ip` was the appended real client regardless of
+    what was sent.
+-   **The hop count is now a documented invariant.** It must equal the number of
+    proxies that actually append to `X-Forwarded-For` — adding a CDN in front of
+    Render without raising it puts `req.ip` back under client control. Noted at
+    the `app.set` call, in `config/env.ts`, and in `.env.example`.
+
+The general lesson is that a security flag being *set* correctly says nothing
+about the value it is translated into one layer down, and that only exercising
+the deployed path surfaced it — this is precisely the class of defect Phase 17
+exists to find, and it could not have been reproduced locally without a proxy in
+front.
+
 ---
 
 # 20. Roadmap

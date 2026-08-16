@@ -26,7 +26,20 @@ export function createApp(): Express {
   // the real client when a trusted proxy sets X-Forwarded-For. Off by
   // default on purpose — see TRUST_PROXY in config/env.ts for why enabling
   // this without a proxy in front is itself a vulnerability.
-  app.set('trust proxy', env.TRUST_PROXY);
+  //
+  // The hop count is 1, NOT `true`. `true` means "trust every hop", which
+  // makes req.ip the *leftmost* X-Forwarded-For entry — and Render appends
+  // the real client IP rather than overwriting the header, so the arriving
+  // value is "<whatever the client sent>, <real client>". Under `true` the
+  // attacker-supplied half wins, and varying one header per request mints a
+  // fresh rate-limit bucket every time, which is exactly the bypass
+  // TRUST_PROXY exists to prevent. Verified against the deployment: with
+  // `true`, changing X-Forwarded-For reset RateLimit-Remaining on every
+  // call; with 1, req.ip is the address Render appended regardless of what
+  // the client sends. Raise this only if another trusted proxy (a CDN) is
+  // ever placed in front — it must equal the number of hops that actually
+  // append to the header.
+  app.set('trust proxy', env.TRUST_PROXY ? 1 : false);
 
   app.use(requestId);
   app.use(helmet());

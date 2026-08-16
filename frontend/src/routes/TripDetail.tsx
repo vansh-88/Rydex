@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getBooking } from '@/api/endpoints/bookings';
 import { getRide } from '@/api/endpoints/rides';
 import { useApiQuery } from '@/api/hooks';
+import { useAuth } from '@/auth/AuthProvider';
 import { Countdown } from '@/components/domain/Countdown';
 import { Fare, FareBreakdown } from '@/components/domain/Fare';
 import { RatingDisplay } from '@/components/domain/StarRating';
@@ -13,6 +14,8 @@ import { StatusHint, StatusPill } from '@/components/domain/StatusPill';
 import { Button, buttonStyles } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { ListSkeleton } from '@/components/ui/Skeleton';
+import { FinalPayment } from '@/features/payment/FinalPayment';
+import { RatingDialog, useHasRated } from '@/features/ratings/RatingDialog';
 import { CancelBookingDialog } from '@/features/trips/CancelBookingDialog';
 import { formatDeparture, formatRelativeToNow } from '@/lib/kolkataDate';
 import { BOOKING_STATUS } from '@/lib/statusMaps';
@@ -26,6 +29,8 @@ export function TripDetail() {
   const { bookingId } = useParams<{ bookingId: string }>();
   const navigate = useNavigate();
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [rateOpen, setRateOpen] = useState(false);
+  const { user } = useAuth();
 
   const {
     data: booking,
@@ -47,6 +52,10 @@ export function TripDetail() {
     ),
   );
 
+  // Whether this user already rated the trip — the backend rejects a second
+  // rating outright, so the prompt has to disappear rather than error.
+  const { hasRated, refetch: refetchRatings } = useHasRated(bookingId, user?.id);
+
   if (isLoading) return <ListSkeleton rows={2} />;
   if (error !== undefined || booking === undefined) {
     return <ErrorState error={error} onRetry={refetch} className="my-12" />;
@@ -54,6 +63,20 @@ export function TripDetail() {
 
   const canCancel = CANCELLABLE.includes(booking.status) && ride?.status !== 'STARTED';
   const awaitingPayment = booking.status === 'PENDING_PAYMENT';
+
+  // The remaining 90% becomes payable once the driver completes the ride —
+  // that is when the backend creates the order and stores its id here.
+  const balanceDue =
+    ride?.status === 'COMPLETED' &&
+    booking.status === 'CONFIRMED' &&
+    booking.finalPaymentOrderId !== null;
+
+  // Rating opens on the same event, but survives past settlement: the backend
+  // accepts a rating while the booking is CONFIRMED or COMPLETED.
+  const canRate =
+    ride?.status === 'COMPLETED' &&
+    (booking.status === 'CONFIRMED' || booking.status === 'COMPLETED') &&
+    !hasRated;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -101,6 +124,35 @@ export function TripDetail() {
             Complete payment
           </Link>
         </div>
+      )}
+
+      {balanceDue && (
+        <FinalPayment
+          booking={booking}
+          onSettled={() => {
+            refetch();
+          }}
+        />
+      )}
+
+      {canRate && ride !== undefined && (
+        <Card>
+          <CardBody className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-medium text-ink">How was your trip?</p>
+              <p className="mt-0.5 text-sm text-ink-muted">
+                Rate {ride.driver.name}. Ratings can&rsquo;t be changed later.
+              </p>
+            </div>
+            <Button
+              onClick={() => {
+                setRateOpen(true);
+              }}
+            >
+              Rate driver
+            </Button>
+          </CardBody>
+        </Card>
       )}
 
       {ride !== undefined && (
@@ -173,6 +225,16 @@ export function TripDetail() {
             </p>
           )}
         </div>
+      )}
+
+      {ride !== undefined && (
+        <RatingDialog
+          bookingId={booking.id}
+          rateeName={ride.driver.name}
+          open={rateOpen}
+          onOpenChange={setRateOpen}
+          onSubmitted={refetchRatings}
+        />
       )}
 
       <CancelBookingDialog

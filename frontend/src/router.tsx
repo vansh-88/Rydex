@@ -1,18 +1,18 @@
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 
 import { AuthProvider } from '@/auth/AuthProvider';
 import { RequireAuth, RequireRole } from '@/auth/guards';
 import { AppShell } from '@/components/layout/AppShell';
+import { ListSkeleton } from '@/components/ui/Skeleton';
 import { Home } from '@/routes/Home';
 import { KitchenSink } from '@/routes/KitchenSink';
 import { Login } from '@/routes/Login';
 import { NotFound } from '@/routes/NotFound';
-import { AdminLayout } from '@/routes/admin/AdminLayout';
-import { AdminVehicles } from '@/routes/admin/AdminVehicles';
-import { DriverApplications } from '@/routes/admin/DriverApplications';
 import { BecomeDriver } from '@/routes/BecomeDriver';
 import { BookRide } from '@/routes/BookRide';
 import { MyTrips } from '@/routes/MyTrips';
+import { ManageRide } from '@/routes/ManageRide';
 import { OfferRide } from '@/routes/OfferRide';
 import { Placeholder } from '@/routes/Placeholder';
 import { Profile } from '@/routes/Profile';
@@ -21,6 +21,22 @@ import { SearchResults } from '@/routes/SearchResults';
 import { TripDetail } from '@/routes/TripDetail';
 import { VehicleDetail } from '@/routes/VehicleDetail';
 import { Vehicles } from '@/routes/Vehicles';
+
+// The admin console is only ever reached by ADMIN accounts, so it is split
+// out of the main bundle rather than shipped to every passenger.
+const AdminLayout = lazy(async () => ({
+  default: (await import('@/routes/admin/AdminLayout')).AdminLayout,
+}));
+const DriverApplications = lazy(async () => ({
+  default: (await import('@/routes/admin/DriverApplications')).DriverApplications,
+}));
+const AdminVehicles = lazy(async () => ({
+  default: (await import('@/routes/admin/AdminVehicles')).AdminVehicles,
+}));
+
+function LazyRoute({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<ListSkeleton rows={3} />}>{children}</Suspense>;
+}
 
 // One AuthProvider above everything, so login and the shell share a session
 // and a sign-in immediately updates the nav without a reload.
@@ -56,10 +72,7 @@ export const router = createBrowserRouter([
               { path: 'trips', element: <MyTrips /> },
               { path: 'trips/:bookingId', element: <TripDetail /> },
               { path: 'offer', element: <OfferRide /> },
-              {
-                path: 'rides/:rideId/manage',
-                element: <Placeholder title="Manage ride" phase="Phase 8" />,
-              },
+              { path: 'rides/:rideId/manage', element: <ManageRide /> },
               { path: 'become-a-driver', element: <BecomeDriver /> },
               { path: 'vehicles', element: <Vehicles /> },
               { path: 'vehicles/:vehicleId', element: <VehicleDetail /> },
@@ -76,11 +89,29 @@ export const router = createBrowserRouter([
                 element: <RequireRole role="ADMIN" />,
                 children: [
                   {
-                    element: <AdminLayout />,
+                    element: (
+                      <LazyRoute>
+                        <AdminLayout />
+                      </LazyRoute>
+                    ),
                     children: [
                       { index: true, element: <Navigate to="/admin/driver-applications" replace /> },
-                      { path: 'driver-applications', element: <DriverApplications /> },
-                      { path: 'vehicles', element: <AdminVehicles /> },
+                      {
+                        path: 'driver-applications',
+                        element: (
+                          <LazyRoute>
+                            <DriverApplications />
+                          </LazyRoute>
+                        ),
+                      },
+                      {
+                        path: 'vehicles',
+                        element: (
+                          <LazyRoute>
+                            <AdminVehicles />
+                          </LazyRoute>
+                        ),
+                      },
                     ],
                   },
                 ],

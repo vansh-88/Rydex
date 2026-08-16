@@ -1,390 +1,107 @@
-# Rydex --- Phased Implementation Plan for Claude Code
+# Rydex — Engineering Log
 
-## Purpose
+How Rydex was built: the order the system came together in, what each stage
+turned out to require, and the bugs that changed the design along the way.
 
-This document tells Claude Code **how to build Rydex from an empty
-folder to a production-quality application in controlled phases**.
+This is the project's history and forward roadmap. For how the system is
+designed today, see [`docs/architecture.md`](./docs/architecture.md); for the
+rules that constrain changes to it, see [`claude.md`](./claude.md).
 
-The architecture is defined in:
+---
 
-``` text
-RYDEX_ARCHITECTURE.md
+## Status
+
+```
+Phases 0–15   COMPLETE     backend implemented and verified at runtime
+Phase 16      NEXT         deployment (Render + Supabase + Upstash)
+Phase 17      BLOCKED      end-to-end verification of the deployment
 ```
 
-That document is the architectural source of truth.
+Every completed phase below is **implemented and runtime-verified, but not
+guarded by automated tests**. Phase 15 was closed by two full manual
+verification passes rather than by building a test suite — §16 records exactly
+what that does and does not mean.
 
-This document is the **implementation execution plan**.
+There is no test framework, no `test` script, no structured logger, no metrics,
+no OpenAPI spec, no Dockerfile, and no CI in this repository. Nothing below
+should be read as claiming otherwise; the gaps are tracked in §19.
 
-------------------------------------------------------------------------
+## Why it was built in this order
 
-# 1. How Claude Code Must Use These Documents
+The sequence is driven by dependency, not by feature priority. Each stage exists
+because the next one could not have been built without it:
 
-Before writing code:
-
-1.  Read `claude.md`.
-2.  Read this file completely.
-3.  Inspect the current repository.
-4.  Determine which phases are already complete.
-5.  Do not recreate existing work.
-6.  Continue from the first incomplete phase.
-7.  Preserve existing architectural decisions.
-8.  Do not silently change requirements.
-
-The project may initially be an empty directory.
-
-Claude Code must build the project incrementally while maintaining a
-working codebase.
-
-------------------------------------------------------------------------
-
-# 2. Fundamental Rule
-
-Do not implement everything as one giant code-generation operation.
-
-Build in **phases**.
-
-After each phase:
-
-``` text
-Implement
-   ↓
-Run typecheck
-   ↓
-Run lint
-   ↓
-Run tests
-   ↓
-Run build
-   ↓
-Verify database migrations
-   ↓
-Verify Docker services
-   ↓
-Fix failures
-   ↓
-Update implementation checklist
-   ↓
-Proceed to next phase
+```
+foundation ──▶ database ──▶ auth ──▶ identity & trust ──▶ supply
+                                                            │
+                                    demand ◀── discovery ◀───┘
+                                      │
+                                      ▼
+                                    money ──▶ async delivery ──▶ hardening
 ```
 
-The goal is that every completed phase leaves the project in a usable,
-compilable state.
-
-------------------------------------------------------------------------
-
-# 3. Phase Overview
-
-``` text
-Phase 0  → Project planning / repository initialization
-Phase 1  → Backend foundation
-Phase 2  → Database foundation
-Phase 3  → Authentication
-Phase 4  → User + profile
-Phase 4.5 → Driver upgrade (license verification)
-Phase 5   → Vehicle + documents
-Phase 5.5 → Admin verification dashboard
-Phase 6   → Map provider + fare engine
-Phase 7  → Ride creation + lifecycle
-Phase 8  → Ride search + PostGIS
-Phase 9  → Booking + seat concurrency
-Phase 10 → Payment system
-Phase 11 → Cancellation + refunds + settlement
-Phase 12 → Notification system
-Phase 13 → Chat
-Phase 13.5 → AI Support Chatbot
-Phase 14 → Security + rate limiting
-Phase 15 → Verification + hardening (complete)
-Phase 16 → Render + Supabase + Upstash deployment (next)
-Phase 17 → Final deployed end-to-end integration
-```
-
-Do not skip directly to the final phase.
-
-------------------------------------------------------------------------
-
-# 4. Phase 0 --- Repository Initialization
-
-## Goal
-
-Turn an empty folder into a clearly structured Rydex repository.
-
-Create:
-
-``` text
-RYDEX/
-├── RYDEX_ARCHITECTURE.md
-├── RYDEX_PHASES.md
-├── README.md
-├── .gitignore
-├── .env.example
-├── package.json
-├── tsconfig.json
-├── eslint.config.*
-├── prettier.config.*
-└── docker-compose.yml
-```
-
-At this point do not implement business features.
-
-## Tasks
-
--   initialize Git
--   initialize Node.js project
--   configure TypeScript
--   enable strict mode
--   configure ESLint
--   configure Prettier
--   configure scripts
--   create `.env.example`
--   create Docker Compose
--   create README
--   create initial source tree
-
-Expected scripts:
-
-``` text
-dev
-build
-start
-lint
-format
-typecheck
-test
-test:watch
-test:integration
-```
-
-## Verification
-
-``` text
-npm install
-npm run typecheck
-npm run lint
-npm run build
-```
-
-Everything must pass.
-
-------------------------------------------------------------------------
-
-# 5. Phase 1 --- Backend Foundation
-
-## Goal
-
-Create the application skeleton.
-
-Recommended structure:
-
-``` text
-src/
-├── app/
-├── config/
-├── modules/
-├── infrastructure/
-├── shared/
-└── server.ts
-```
-
-Implement:
-
--   Express application
--   environment validation
--   centralized error handling
--   request ID middleware
--   logging
--   CORS
--   security headers
--   JSON parsing
--   route registration
--   health endpoint
--   readiness endpoint
-
-Endpoints:
-
-``` text
-GET /health
-GET /ready
-```
-
-## Rules
-
-Controllers must be thin.
-
-Do not implement business logic yet.
-
-------------------------------------------------------------------------
-
-# 6. Phase 2 --- Database Foundation
-
-## Goal
-
-Connect PostgreSQL + PostGIS and establish migration infrastructure.
-
-Docker:
-
-``` text
-PostgreSQL + PostGIS
-Redis
-```
-
-Implement:
-
--   Prisma
--   PostgreSQL connection
--   PostGIS extension
--   migration system
--   seed system
--   database health check
-
-At this stage create the initial schema foundation.
-
-Do not prematurely create every future table if its design has not yet
-been implemented.
-
-------------------------------------------------------------------------
-
-# 7. Phase 3 --- Authentication
-
-## Goal
-
-Implement secure OTP authentication.
-
-### Features
-
-``` text
-POST /api/v1/auth/request-otp
-POST /api/v1/auth/verify-otp
-POST /api/v1/auth/refresh
-POST /api/v1/auth/logout
-```
-
-Implement:
-
--   OTP generation
--   OTP hashing
--   Redis storage
--   OTP expiry
--   resend cooldown
--   OTP attempt limit
--   Resend integration
--   access tokens
--   refresh tokens
--   refresh-token rotation
--   revocation
--   authentication middleware
--   role authorization
-
-### Access token
-
-Short-lived.
-
-Recommended:
-
-``` text
-15 minutes
-```
-
-### Refresh token
-
-Recommended:
-
-``` text
-30 days
-```
-
-Store only the refresh token hash.
-
-## Tests
-
-At minimum:
-
-``` text
-valid OTP
-invalid OTP
-expired OTP
-too many attempts
-resend cooldown
-valid access token
-expired access token
-valid refresh token
-refresh token rotation
-revoked refresh token
-logout
-unauthorized request
-role authorization
-```
-
-Automated test infrastructure is intentionally not set up in this
-project yet (deferred by explicit request — see git history). The
-above was instead verified manually against the real Postgres/Redis
-containers: OTP request/verify (valid, invalid, expired-key,
-too-many-attempts), resend cooldown, per-IP rate limiting on both
-endpoints, refresh rotation, revoked-token reuse detection, idempotent
-logout, and `authenticate`/`authorize` middleware (no protected route
-exists yet to exercise them over real HTTP — exercised directly
-instead). Two real bugs were caught and fixed in the process:
-`verifyOtp` was consuming the one-time code before validating that
-signup had all required fields, and reuse-detection's revocation
-write was being rolled back because it happened inside the same
-Prisma transaction as the thrown error.
-
-## Known gap: driver upgrade path --- resolved (see Phase 4.5)
-
-Per an explicit product decision, every new signup is created as
-`PASSENGER` (`userRepository.createPassenger`) — there was, at the time
-this note was written, **no way for a user to become a `DRIVER`**.
-Vehicle creation (Phase 5) and ride creation (Phase 7) both require
-`user.role == DRIVER` (claude.md §8), so this had to be resolved before
-Phase 5 could be usable end-to-end.
-
-Resolved via an explicit product decision (asked directly, not
-invented): a `PASSENGER` submits a driving-license document; an admin
-reviews and approves/rejects it; approval flips `role -> DRIVER`. See
-Phase 4.5 below and claude.md §8/§96/§97 (2026-08-11).
-
-------------------------------------------------------------------------
-
-# 8. Phase 4 --- User Module
-
-## Goal
-
-Build the user/profile domain.
-
-Implement:
-
-``` text
-GET /users/me
-PATCH /users/me
-```
-
-Potential profile data:
-
-``` text
-name
-phone
-email
-profile image
-role
-rating summary
-```
-
-Implement:
-
--   user repository
--   user service
--   validation
--   authorization
--   profile image abstraction
--   user status
-
-Do not allow users to modify server-controlled fields such as:
-
-``` text
-rating_average
-rating_count
-verification status
-payment status
-```
+- **Auth before everything** — every other module needs an authenticated user id,
+  and ownership checks are meaningless without one.
+- **Trust before supply** — a driver cannot post a ride until there is a way to
+  become a driver and to verify a vehicle, so licence and vehicle review had to
+  precede ride creation.
+- **Supply before discovery** — there is nothing to search until rides exist.
+- **Discovery before demand** — a booking needs a ride the passenger can find.
+- **Demand before money** — the seat hold defines what a payment is *for*.
+- **Money before async delivery** — refunds and settlement generate most of the
+  events worth notifying about.
+
+Two stages arrived out of their planned order, both for real reasons recorded in
+§18: BullMQ was introduced during Booking rather than Notifications (seat-hold
+expiry needs a delayed job and cannot be built without one), and the payment
+provider abstraction was stood up during Ride creation rather than Payments
+(ride creation needs something behind `createOrder()` to persist against).
+
+---
+
+## 1. Foundation and database (Phases 0–2)
+
+The first three stages produced no business logic at all — deliberately. They
+established the TypeScript/Express/Prisma skeleton, Docker Compose for
+PostgreSQL + PostGIS and Redis, ESLint/Prettier, startup environment validation
+that exits non-zero on bad config, centralised error handling, request ids, and
+`/health` + `/ready`.
+
+The database stage modelled only the entities whose design was already settled —
+`User`, `RefreshToken`, `UserDocument`, `Vehicle`, `VehicleDocument` — and left
+`Ride`, `Booking`, `Payment` and the rest to the phases that would actually use
+them. That restraint mattered later: every model that arrived subsequently did so
+with a concrete query pattern already in hand, which is why the index list is
+short and every entry earns its place.
+
+Two decisions from this stage propagate through the whole codebase: UUID primary
+keys everywhere (so no resource is enumerable by incrementing a path segment),
+and `Decimal(10,2)` plus `Timestamptz(3)` as the defaults for money and time.
+
+## 2. Authentication (Phase 3)
+
+Passwordless OTP login, backed by Redis, with short-lived access tokens and
+rotating refresh tokens.
+
+The design choices worth calling out: OTPs are bcrypt-hashed before they touch
+Redis and never logged; a failed attempt re-writes the record with the
+*remaining* TTL so guessing cannot extend the window; refresh tokens are opaque
+random bytes stored only as a SHA-256 hash, so a database leak yields nothing
+usable; and presenting an already-revoked refresh token revokes the entire token
+family rather than just that token.
+
+One implementation detail took a second attempt to get right. Rotation runs
+inside a transaction, and the reuse path needs to *write* (revoking the family)
+before rejecting the request. Throwing inside a Prisma interactive transaction
+rolls back everything written in it — including that revocation. The function
+therefore returns a result variant from the transaction and throws only after it
+has committed.
+
+## 3. User profile (Phase 4)
+
+Profile read and update, scoped so a user can only ever touch their own record —
+the id comes from the access token, never from the request body or params, so no
+separate authorization rule was needed.
 
 ## Status: complete
 
@@ -426,51 +143,21 @@ fields silently stripped from `PATCH` body; empty `PATCH` body → 400.
 
 ------------------------------------------------------------------------
 
-# 8a. Phase 4.5 --- Driver Upgrade (License Verification)
+## 4. Driver upgrade via licence verification (Phase 4.5)
 
-## Goal
+This phase existed because Phase 3 exposed a gap that blocked everything
+downstream: every signup lands as `PASSENGER`, and there was no path to
+`DRIVER`, so ride creation could never be reached end to end.
 
-Resolve the driver-upgrade gap flagged above: give a `PASSENGER` a way
-to become a `DRIVER`, per the explicit product decision in claude.md
-§8/§96/§97 (2026-08-11) — submit a driving-license document, get
-reviewed by an admin, get approved or rejected.
+Rather than add a self-serve role switch — which would make the role meaningless
+— a passenger now submits a driving licence, and only an admin approval flips
+the role. Approval is a single conditional update that sets `role = DRIVER` and
+`driverLicenseStatus = VERIFIED` together, guarded on the row still being
+`PENDING`, so two admins approving simultaneously produce exactly one approval.
 
-This phase is inserted between Phase 4 (User) and Phase 5 (Vehicle)
-because Phase 5's vehicle-creation endpoint is gated on
-`user.role == DRIVER`, and until this phase exists nobody can ever
-reach that role. It also stands up the first slice of the Admin Module
-(claude.md §96) — the vehicle-verification half of that module still
-belongs to Phase 5.5.
-
-## Tasks
-
--   Prisma: `UserDocumentType` enum (`DRIVING_LICENSE`); `User` gains
-    `driverLicenseStatus` (`NONE | PENDING | VERIFIED | REJECTED`,
-    default `NONE`), `driverLicenseVerifiedBy` (FK → `users`,
-    nullable), `driverLicenseVerifiedAt`, `driverLicenseRejectionReason`
--   Cloudinary provider abstraction + signed/private URL generation
-    (claude.md §14, §17-style strategy interface) — shared by this
-    phase and Phase 5's vehicle documents
--   Upload middleware: file-type allowlist checked by magic bytes (not
-    just the client-sent MIME type), size limit
--   `POST /api/v1/users/me/driver-application` — passenger submits a
-    license file; rejects if already `DRIVER` or already `PENDING`
--   Admin authorization middleware (`role === 'ADMIN'`) — reused as-is
-    from the generic `authorize(...)` already built in Phase 3
--   `GET /api/v1/admin/driver-applications?status=PENDING`
--   `POST /api/v1/admin/driver-applications/:userId/verify` — atomic:
-    `driverLicenseStatus -> VERIFIED` **and** `role -> DRIVER`
--   `POST /api/v1/admin/driver-applications/:userId/reject` — requires
-    `rejectionReason`; role stays `PASSENGER`, resubmission allowed
-
-## Rules
-
--   No self-serve role upgrade — only admin approval sets `role`
--   A previously-issued access token keeps the old role until the next
-    `POST /auth/refresh` (tokenService already re-reads role from the
-    DB on every rotation — claude.md §8)
--   This does not widen the Admin Module beyond what claude.md §96 now
-    documents: vehicle documents + driver licenses, nothing else
+The role change propagates without any extra mechanism: refresh-token rotation
+already re-reads the role from the database, so the user's next refresh issues a
+token reflecting it.
 
 ## Status: complete
 
@@ -496,7 +183,7 @@ VERIFIED`; verifying an already-decided application → 409
 `DRIVER_APPLICATION_NOT_PENDING`; verifying a nonexistent user → 404
 `USER_NOT_FOUND`; the pre-existing access token issued before approval
 still decoded to `role: PASSENGER`, and `POST /auth/refresh` correctly
-issued a new token with `role: DRIVER` (confirms claude.md §8's claim about
+issued a new token with `role: DRIVER` (confirms spec §8's claim about
 `tokenService` re-reading role on rotation, without needing new code);
 reject without `rejectionReason` → 400; reject with a reason → 200, and
 `GET /users/me` reflected `REJECTED` + the reason; resubmitting after
@@ -513,73 +200,17 @@ corrected `.env`.
 
 ------------------------------------------------------------------------
 
-# 9. Phase 5 --- Vehicle + Documents
+## 5. Vehicles and documents (Phase 5)
 
-## Goal
+Vehicle registry plus RC / insurance / pollution document upload to Cloudinary.
 
-Allow drivers to register vehicles and upload documents.
-
-Implement:
-
-``` text
-POST /vehicles
-GET /vehicles
-GET /vehicles/:id
-PATCH /vehicles/:id
-POST /vehicles/:id/documents
-```
-
-Vehicle fields include:
-
-``` text
-registration number
-make
-model
-variant
-color
-vehicle type
-seat capacity
-AC
-AC working status
-```
-
-Implement Cloudinary integration behind an abstraction.
-
-Documents:
-
-``` text
-RC
-INSURANCE
-POLLUTION
-```
-
-Store metadata in PostgreSQL.
-
-Store actual files in Cloudinary.
-
-## Driver eligibility
-
-Creating a ride must verify:
-
-``` text
-driver role
-+
-vehicle ownership
-+
-vehicle status = ACTIVE
-+
-vehicle verification_status = VERIFIED
-+
-vehicle seat_capacity >= requested seats
-```
-
-**Updated 2026-08-11 (claude.md §97):** verification now *does* gate ride
-creation — this reverses what this section originally said. A vehicle
-reaches `VERIFIED` only through Phase 5.5's admin endpoints; until then it
-can be created, listed, and managed by its owner, but Phase 7 (not yet
-built) will reject it for ride creation.
-
-Do not rely only on frontend checks.
+Documents are validated by magic bytes rather than the client-declared MIME type,
+capped at 5 MB, and stored with Cloudinary's `authenticated` delivery type — so
+the stored URL is not publicly fetchable and every read generates a fresh signed
+URL. There is deliberately no permanently-usable link to anyone's driving licence
+in the system. Only vehicle *creation* carries a role gate; everything else is
+scoped by ownership in the service layer, returning 404 rather than 403 so
+another driver's vehicle existence never leaks.
 
 ## Status: complete
 
@@ -612,59 +243,15 @@ creation eligibility check that will consume `verification_status`.
 
 ------------------------------------------------------------------------
 
-# 9a. Phase 5.5 --- Admin Verification Dashboard
+## 6. Admin verification (Phase 5.5)
 
-## Goal
+A deliberately narrow admin module: review driving licences, review vehicle
+documents, and nothing else. No user management, no ride or booking overrides, no
+financial actions.
 
-Allow admins to manually review and approve/reject vehicle documents
-uploaded in Phase 5. See `claude.md` §96 for the full module spec.
-
-This phase is inserted between Phase 5 (Vehicle) and Phase 6 (Map +
-Fare) because it operates directly on data Phase 5 creates.
-
-**Updated 2026-08-11 (claude.md §97):** ride creation eligibility
-(Phase 7) *does* now depend on verification status — this reverses
-what this section originally said. A vehicle must reach
-`verification_status = VERIFIED` through this phase's endpoints before
-it is ride-eligible. The `ADMIN` role, its authorization middleware,
-and admin provisioning already exist by this point (built in Phase
-4.5) — this phase only adds the vehicle-specific review endpoints and
-the `vehicles.verified_by`/`verified_at`/`rejection_reason` columns.
-
-## Tasks
-
--   add `verified_by`, `verified_at`, `rejection_reason` to `vehicles`
-    (migration)
--   reuse the `authorize('ADMIN')` middleware and admin routing already
-    set up in Phase 4.5 — no new admin plumbing needed
-
-## Endpoints
-
-``` text
-GET  /api/v1/admin/vehicles?status=PENDING
-GET  /api/v1/admin/vehicles/:id
-POST /api/v1/admin/vehicles/:id/verify
-POST /api/v1/admin/vehicles/:id/reject
-```
-
-## Rules
-
--   admin routes must never be reachable by `DRIVER`/`PASSENGER` roles
--   documents are viewed via signed/private Cloudinary URLs, never raw
-    public URLs (`claude.md` §14)
--   rejection requires a `rejection_reason`
--   this module does not touch users, rides, bookings, or payments —
-    keep its scope to vehicle document verification only
-
-## Tests
-
-``` text
-non-admin cannot access admin routes
-list pending vehicles
-verify vehicle -> status VERIFIED, verified_by/verified_at set
-reject vehicle -> status REJECTED, rejection_reason required
-PENDING/REJECTED vehicle is not ride-eligible; VERIFIED is (once Phase 7 exists)
-```
+Admins are provisioned by seed script or manual insert — never self-registered —
+and authenticate through the same OTP flow as everyone else. `ADMIN` is a third
+value on the existing role column, not a parallel auth system.
 
 ## Status: complete
 
@@ -679,7 +266,7 @@ phase was pure application layer: `GET /admin/vehicles?status=PENDING`,
 The verify/reject repository functions use the same conditional-update
 pattern as Phase 4.5's driver-license decision (`UPDATE ... WHERE id = ?
 AND verification_status = 'PENDING'`), so two concurrent admin decisions
-on the same vehicle can't both apply (claude.md §58).
+on the same vehicle can't both apply (spec §58).
 
 While building this, the document-signing snippet
 (`documentProvider.getSignedUrl` + `extractFormatFromSecureUrl`) had
@@ -710,80 +297,33 @@ to gate.
 
 ------------------------------------------------------------------------
 
-# 10. Phase 6 --- Map Provider + Fare Engine
+## 7. Map provider and fare engine (Phase 6)
 
-## Goal
+The first two provider abstractions: `MapProvider` for geocoding, routing and
+distance matrices, and `FareStrategy` for pricing.
 
-Create provider-independent infrastructure.
+The map provider changed before a line of it was written. Mapbox — the
+originally chosen vendor — began requiring a payment method before any free-tier
+usage, which conflicted with a hard constraint of no card on file with a mapping
+vendor. Geoapify replaced it after comparing eight alternatives on free-tier
+limits, commercial-use terms and coverage. Because the domain depends only on the
+interface, this was a provider swap rather than a redesign.
 
-Implement:
-
-``` text
-MapProvider
-PaymentProvider
-FareStrategy
-```
-
-Do not implement payment behavior fully yet.
-
-## MapProvider
-
-Methods:
-
-``` text
-geocode
-reverseGeocode
-getRoute
-getDistanceMatrix
-```
-
-Initial provider:
-
-``` text
-Mapbox
-```
-
-The Ride module must not import Mapbox directly.
-
-## Fare
-
-Create:
-
-``` text
-FareService
-HeuristicFareStrategy
-```
-
-Inputs:
-
-``` text
-base price
-distance
-fuel price
-vehicle type
-traffic multiplier
-driver rating
-```
-
-Store calculated fare on the ride.
-
-Do not recalculate historical ride fare from current pricing
-configuration.
-
-## Tests
-
-Test deterministic fare calculations thoroughly.
+The fare formula is `(baseFare + km × pricePerKm)` scaled by bounded multipliers
+for vehicle type, traffic and driver rating. Every multiplier is bounded on
+purpose: they compose multiplicatively, so a single unbounded one is a pricing
+incident. Driver rating can move a fare by at most ±5%.
 
 ## Status: complete
 
 Implemented `MapProvider` (`src/infrastructure/maps/mapProvider.ts`) —
 `geocode`/`reverseGeocode`/`getRoute`/`getDistanceMatrix`, exactly as
-specified in claude.md §17 — with `GeoapifyMapProvider` as the concrete
+specified in spec §17 — with `GeoapifyMapProvider` as the concrete
 implementation (`src/infrastructure/maps/geoapifyMapProvider.ts`), wired
 up via a factory (`src/infrastructure/maps/index.ts`) that switches on a
 new `MAP_PROVIDER` env var, mirroring the existing Resend/Cloudinary
 factory pattern. **Geoapify replaces the originally-planned Mapbox** —
-see claude.md §17/§97 (2026-08-12) for the full reasoning: Mapbox's
+see spec §17/§97 (2026-08-12) for the full reasoning: Mapbox's
 signup now requires a card, which conflicts with an explicit
 no-payment-method constraint; Geoapify was chosen after comparing it
 against OpenRouteService, LocationIQ, MapTiler, and self-hosted
@@ -792,7 +332,7 @@ OSRM+Nominatim.
 Also implemented the Fare engine under a new `ride` module (only its
 `strategies/`/`services/` slice — controllers/routes/repositories are
 Phase 7's job): `FareStrategy` interface + `HeuristicFareStrategy`
-(`src/modules/ride/strategies/`) implementing claude.md §29's formula
+(`src/modules/ride/strategies/`) implementing spec §29's formula
 (`baseFare + distanceKm * pricePerKm`, then bounded vehicle/traffic/
 rating multipliers — rating multiplier is linearly interpolated between
 configured min/max bounds across the 1-5 rating range, per §29's
@@ -820,9 +360,9 @@ clamps to the configured max rather than exploding the fare, and a
 zero-distance ride (fare correctly reduces to exactly the base fare).
 `npm run typecheck`, `npm run lint`, and `npm run build` all pass.
 
-Not built in this phase (intentionally, per steps.md §10's own scope and
-claude.md §87): no ride HTTP endpoints, no ride persistence, no map
-matching (claude.md §17 interface still has no `mapMatch` method — no
+Not built in this phase (intentionally, per §10 (Booking)'s own scope and
+spec §87): no ride HTTP endpoints, no ride persistence, no map
+matching (spec §17 interface still has no `mapMatch` method — no
 current requirement drives adding one), no map-tile/rendering concern
 (that's a frontend SDK choice, outside `MapProvider` entirely). Phase 7
 consumes both `mapProvider` and `calculateFare()` when ride creation is
@@ -830,62 +370,21 @@ built.
 
 ------------------------------------------------------------------------
 
-# 11. Phase 7 --- Ride Creation + Lifecycle
+## 8. Ride creation and lifecycle (Phase 7)
 
-## Goal
+Ride creation, the ride state machine, and the driver's 5% posting commission.
 
-Allow verified drivers to create and manage rides.
+Two things fell out of this phase that were not in the original plan. First, the
+ride needed a `PENDING_PAYMENT` state: a ride costs its driver a commission,
+payment confirmation is webhook-driven and therefore asynchronous, so a ride
+cannot become searchable inside the same request that created it. Second, the
+payment provider abstraction had to be stood up here rather than in the Payments
+phase, because ride creation needs something behind `createOrder()` to persist an
+order reference against.
 
-Endpoints:
-
-``` text
-POST /api/v1/rides
-GET /api/v1/rides/:id
-POST /api/v1/rides/:id/cancel
-POST /api/v1/rides/:id/start
-POST /api/v1/rides/:id/complete
-```
-
-Creation flow:
-
-``` text
-Authenticate driver
-      ↓
-Validate vehicle (ownership + ACTIVE + seat capacity)
-      ↓
-Validate route input
-      ↓
-MapProvider.getRoute()
-      ↓
-Calculate distance
-      ↓
-Calculate fare
-      ↓
-Calculate 5% driver posting fee
-      ↓
-Persist ride in PENDING_PAYMENT
-      ↓
-Create payment order for posting commission
-      ↓
-Return ride + payment order to client
-```
-
-Ride does not become `OPEN` in this request. A payment webhook
-(Phase 10) confirms the posting commission and transitions
-`PENDING_PAYMENT -> OPEN`. See `claude.md` §18/§19/§97.
-
-Implement state machine:
-
-``` text
-PENDING_PAYMENT
-OPEN
-FULL
-STARTED
-COMPLETED
-CANCELLED
-```
-
-Do not allow arbitrary status mutation.
+The creation flow settled the ordering rule the rest of the codebase follows:
+every external call — routing, then order creation — happens *before* the single
+database transaction, never inside it.
 
 ## Status: complete
 
@@ -896,7 +395,7 @@ alongside MapProvider/FareStrategy) but only built the latter two. Ride
 creation's flow (step 12: "create payment order for posting commission")
 needs a real call site, so this phase added the interface +
 `StubPaymentProvider` (`src/infrastructure/payments/`) that Phase 6
-should have included — see claude.md §37 (2026-08-12). It generates a
+should have included — see spec §37 (2026-08-12). It generates a
 locally-referenced order id, not a real charge; Phase 10 swaps in
 `RazorpayProvider` behind the same interface.
 
@@ -904,19 +403,19 @@ New `Ride` Prisma model (migration `20260812123854_ride_creation`):
 `origin`/`destination` are `Unsupported("geography(Point,4326)")` since
 Prisma Client has no native geography type, so the ride repository
 (`src/modules/ride/repositories/rideRepository.ts`) reads/writes them via
-raw SQL (`Prisma.sql`/`Prisma.raw`, claude.md §77) using
+raw SQL (`Prisma.sql`/`Prisma.raw`, spec §77) using
 `ST_MakePoint`/`ST_X`/`ST_Y` — every other column (including the
 `PENDING_PAYMENT`/`OPEN`/`FULL`/`STARTED`/`COMPLETED`/`CANCELLED` status
 transitions) goes through the normal Prisma Client API. GiST indexes on
 `origin`/`destination` were hand-added to the generated migration SQL
-(claude.md §16) since Prisma can't declare `@@index` on an `Unsupported`
+(spec §16) since Prisma can't declare `@@index` on an `Unsupported`
 field.
 
 Vehicle eligibility for ride creation (ownership + `ACTIVE` +
-`VERIFIED` + seat capacity, claude.md §8/§97) lives in one function,
+`VERIFIED` + seat capacity, spec §8/§97) lives in one function,
 `assertVehicleEligibleForRide`
 (`src/modules/ride/services/vehicleEligibilityService.ts`), reused as
-claude.md §96 says it should be. Commission calculation
+spec §96 says it should be. Commission calculation
 (`src/modules/ride/services/commissionService.ts`) centralizes the 5%
 posting-fee formula (§30) in one place. Every external call
 (`MapProvider.getRoute`, `PaymentProvider.createOrder`) happens before
@@ -959,126 +458,25 @@ typecheck`, `npm run lint`, and `npm run build` all pass.
 
 ------------------------------------------------------------------------
 
-# 12. Phase 8 --- Ride Search + PostGIS
+## 9. Ride search and PostGIS (Phase 8)
 
-## Goal
+The core discovery query, and the phase with the most careful SQL in the project.
 
-Build one of the most important features of Rydex.
+A passenger searches by pickup point, drop point and calendar date — no time
+range. The whole match is one PostGIS query: the date becomes a half-open UTC
+range so the `(departure_time, status)` index applies, two `ST_DWithin` calls do
+GiST-accelerated radius filtering on `geography(Point,4326)` columns, and
+`ST_Distance` computes exact spheroid distances only for the rows that survive.
 
-Passenger searches by:
+Three choices here are load-bearing. `geography` rather than `geometry`, because
+`geometry` at SRID 4326 returns degrees rather than metres. Filtering in the
+database rather than in Node, because application-side filtering cannot use an
+index and breaks pagination — `LIMIT` has to apply after filtering and sorting.
+And the map provider is never called during search; it is for routing and
+geocoding, not discovery.
 
-``` text
-date
-pickup
-destination
-```
-
-There is no time-range filter.
-
-## Matching
-
-A ride matches when:
-
-``` text
-departure date = requested date
-
-AND
-
-origin <= 10 km from requested pickup
-
-AND
-
-destination <= 10 km from requested destination
-
-AND
-
-ride is bookable
-
-AND
-
-available seats > 0
-```
-
-Use configuration:
-
-``` text
-RIDE_ORIGIN_MATCH_RADIUS_METERS=10000
-RIDE_DESTINATION_MATCH_RADIUS_METERS=10000
-```
-
-## Query requirements
-
-Use:
-
-``` text
-PostGIS
-ST_DWithin
-ST_Distance
-GiST indexes
-```
-
-Do not call the map provider for every result.
-
-## Sorting
-
-Support:
-
-``` text
-DEPARTURE_TIME
-PICKUP_DISTANCE
-DESTINATION_DISTANCE
-FARE
-DRIVER_RATING
-```
-
-Default:
-
-``` text
-DEPARTURE_TIME ASC
-```
-
-## Pagination
-
-Use cursor pagination.
-
-Default:
-
-``` text
-20 results
-```
-
-Maximum should be configurable.
-
-Cursor must be opaque.
-
-## Critical testing
-
-Create realistic test data and verify:
-
-``` text
-origin exactly inside radius
-origin exactly outside radius
-
-destination inside radius
-destination outside radius
-
-both inside
-one outside
-
-different dates
-
-no seats
-
-cancelled ride
-
-sorting
-
-pagination
-
-ties
-```
-
-Use `EXPLAIN ANALYZE` to verify spatial indexes are actually being used.
+Sorting maps a validated enum to one of five fixed SQL expressions, always with
+`id` as a tie-breaker so keyset pagination cannot skip or repeat rows.
 
 ## Status: complete
 
@@ -1093,7 +491,7 @@ makes `req.query` a getter-only property (confirmed directly in
 `express/lib/request.js` before writing this — reassigning it throws).
 
 `rideSearchRepository.search()` is one hand-written raw-SQL query
-(claude.md §77) joining `rides`/`vehicles`/`users`, using
+(spec §77) joining `rides`/`vehicles`/`users`, using
 `ST_DWithin`/`ST_Distance` for the 10km radius match and distance
 sorting (never JS distance math, never a per-result MapProvider call —
 §23). The date filter converts the requested Asia/Kolkata calendar date
@@ -1145,89 +543,32 @@ run typecheck`, `npm run lint`, and `npm run build` all pass.
 
 ------------------------------------------------------------------------
 
-# 13. Phase 9 --- Booking + Seat Concurrency
+## 10. Booking and seat concurrency (Phase 9)
 
-## Goal
+The phase the whole system's correctness rests on.
 
-Allow passengers to book rides safely.
+The seat hold *is* the `PENDING_PAYMENT` booking row — there is no Redis counter
+and no separate reservation table. `available_seats` decrements at booking
+creation, not at payment confirmation, because holding at confirmation lets two
+passengers both reach a payment screen for the same last seat and turns a clean
+409 into a refund.
 
-Endpoints:
+The mechanism is a single conditional `UPDATE` whose `WHERE` clause carries the
+seat guard. PostgreSQL takes a row lock for the statement's duration, so a
+concurrent update blocks and then re-evaluates its guard against the committed
+value — returning zero rows and a `409`. There is no read-then-write window to
+lose, which is why this is one statement rather than `SELECT … FOR UPDATE`
+followed by a check and an update.
 
-``` text
-POST /api/v1/rides/:rideId/bookings
-GET /api/v1/bookings/:id
-POST /api/v1/bookings/:id/cancel
-```
-
-Booking state:
-
-``` text
-PENDING_PAYMENT
-CONFIRMED
-PAYMENT_FAILED
-CANCELLED
-COMPLETED
-```
-
-## Critical requirement
-
-Prevent overselling.
-
-When two passengers attempt to book the last seat simultaneously:
-
-``` text
-only one can succeed
-```
-
-Use PostgreSQL transaction + row locking.
-
-Conceptually:
-
-``` text
-BEGIN
-
-SELECT ride FOR UPDATE
-
-check seats
-
-create booking (PENDING_PAYMENT)
-
-reserve/decrement seats
-
-COMMIT
-```
-
-`available_seats` is decremented at booking creation, not at payment
-confirmation (`claude.md` §35/§36) — this is what makes the hold real.
-
-## Reservation expiry
-
-Schedule a BullMQ delayed job when a `PENDING_PAYMENT` booking is
-created. If payment hasn't completed by the time it fires:
-
-``` text
-BEGIN
-
-SELECT ride FOR UPDATE
-
-if booking still PENDING_PAYMENT:
-    booking -> CANCELLED (or PAYMENT_FAILED)
-    increment available_seats
-
-COMMIT
-```
-
-This job must be idempotent and must not release seats for a booking
-that was confirmed in the meantime (the row lock + status check
-handles this).
-
-Do not trust Redis alone for final seat consistency.
+This phase also forced BullMQ into the project three phases earlier than planned:
+a seat hold has to expire if payment never completes, and there is no way to
+build that without a delayed job.
 
 ## Status: complete
 
 Implemented all three endpoints (`src/modules/booking/`): `POST
 /rides/:id/bookings` is registered on `rideRouter`
-(`src/modules/ride/routes.ts`) per claude.md §51's nesting, but its
+(`src/modules/ride/routes.ts`) per spec §51's nesting, but its
 controller/service/repository all live in the booking module — routing
 is the only thing that crosses the module boundary, same pattern
 `admin/routes.ts` already established. `GET /bookings/:id` and `POST
@@ -1235,7 +576,7 @@ is the only thing that crosses the module boundary, same pattern
 `/api/v1/bookings`.
 
 Two real architectural gaps found and closed along the way, both
-documented in claude.md §97 (2026-08-13):
+documented in the decision log (§18) (2026-08-13):
 
 -   §32 listed `booking_status` and `payment_status` as two separate
     columns, but §33's actual state list describes one lifecycle, not
@@ -1252,7 +593,7 @@ documented in claude.md §97 (2026-08-13):
     pick up any job) and is started/closed alongside the HTTP server in
     `server.ts`. Phase 12 reuses this same queue infrastructure.
 
-Seat reservation (claude.md §36) is one atomic conditional `UPDATE`
+Seat reservation (spec §36) is one atomic conditional `UPDATE`
 (`rideRepository.reserveSeats`) — `available_seats = available_seats -
 N WHERE status IN ('OPEN','FULL') AND available_seats >= N`, in the same
 statement flipping `OPEN -> FULL` when a booking exhausts the last seat.
@@ -1317,100 +658,22 @@ amount and any refund logic on cancellation — Phase 11 (§34).
 
 ------------------------------------------------------------------------
 
-# 14. Phase 10 --- Payment System
+## 11. Payments (Phase 10)
 
-## Goal
+Razorpay behind the existing `PaymentProvider` interface, idempotency keys, and
+webhook processing.
 
-Implement payment provider integration safely.
+The rule that shapes everything here is that the client's success callback is
+never authoritative — a signature-verified webhook drives every state change.
+Since webhooks get retried, every transition fires from exactly one source state,
+so duplicate delivery matches nothing and is a no-op.
 
-Initial provider:
-
-``` text
-Razorpay
-```
-
-behind:
-
-``` text
-PaymentProvider
-```
-
-Implement:
-
-``` text
-create order
-verify payment
-payment status
-webhook
-```
-
-## Driver posting fee
-
-Driver pays:
-
-``` text
-5%
-```
-
-when creating/publishing a ride. The webhook that confirms this
-payment must also transition the ride `PENDING_PAYMENT -> OPEN`
-(`claude.md` §19). If the commission payment fails, transition the
-ride to `CANCELLED` instead of leaving it stuck in `PENDING_PAYMENT`.
-
-## Passenger payment
-
-Passenger pays:
-
-``` text
-10% upfront
-```
-
-This is non-refundable unless the driver cancels.
-
-## Idempotency
-
-Implement:
-
-``` text
-Idempotency-Key
-```
-
-for payment-producing APIs.
-
-Create:
-
-``` text
-idempotency_keys
-```
-
-with request hash and stored response.
-
-Same key + same request:
-
-``` text
-return original result
-```
-
-Same key + different request:
-
-``` text
-reject
-```
-
-## Webhooks
-
-Webhook must:
-
-``` text
-verify signature
-identify payment
-be idempotent
-update payment
-update booking
-enqueue notification
-```
-
-Never trust frontend payment success as final confirmation.
+Idempotency is enforced by the database rather than by application checks: a
+UNIQUE constraint on `(user_id, key)` decides which of two concurrent requests
+with the same key wins, and the loser replays the stored response. The interface
+also gained a fourth method, `verifyWebhookSignature` — signature verification is
+vendor-specific crypto, which is exactly the kind of detail the abstraction exists
+to keep out of the domain.
 
 ## Status: complete
 
@@ -1426,7 +689,7 @@ payment-producing endpoints from Phases 7/9.
 
 `PaymentProvider` gained a fourth method, `verifyWebhookSignature`, since
 webhook signing is vendor-specific raw crypto that belongs behind the
-interface, not hardcoded in the webhook module (claude.md §37/§40).
+interface, not hardcoded in the webhook module (spec §37/§40).
 `StubPaymentProvider` implements it for real (HMAC against
 `PAYMENT_PROVIDER_WEBHOOK_SECRET`) so local testing without a Razorpay
 account still exercises genuine signature verification. The factory
@@ -1435,24 +698,24 @@ configured `PAYMENT_PROVIDER_KEY`/`SECRET`, exactly mirroring Resend's
 real-vs-console-fallback pattern.
 
 Webhook processing (`webhookService.processPaymentWebhook`) runs the
-full claude.md §40 flow in one DB transaction: verify signature →
+full spec §40 flow in one DB transaction: verify signature →
 identify the `Payment` row by `provider_order_id` → idempotency check
 (conditional `CREATED -> SUCCESS/FAILED`, so a duplicate delivery is a
 no-op) → resolve the matching `Transaction` → apply the ride/booking
 state transition (`PENDING_PAYMENT -> OPEN`/`CANCELLED` for the driver's
 posting fee, `PENDING_PAYMENT -> CONFIRMED`/`PAYMENT_FAILED` for a
 booking's prepayment, releasing seats on failure). Notification
-enqueueing (the last step in claude.md §40's flow) is explicitly not
+enqueueing (the last step in spec §40's flow) is explicitly not
 built — Phase 12 doesn't exist yet.
 
 Payment and Transaction rows are created together by one function
 (`paymentRecordService.recordOrder`), called from inside the same DB
 transaction as the ride/booking INSERT for ride creation, and from a
 small follow-up transaction (after the external `createOrder()` call,
-per §5.5) for booking creation — see claude.md §97 (2026-08-13) for why
+per §5.5) for booking creation — see the decision log (§18) (2026-08-13) for why
 both records are created together rather than Transaction-only-on-success.
 
-One real bug found and fixed during testing, documented in claude.md §97
+One real bug found and fixed during testing, documented in the decision log (§18)
 (2026-08-13): a payment webhook arriving *after* a booking's seat-hold
 TTL already expired left the Payment/Transaction correctly `SUCCESS` but
 the booking silently stuck `CANCELLED` with no signal anything was
@@ -1479,7 +742,7 @@ Razorpay's actual API — not the stub):
     signature → 401 `INVALID_WEBHOOK_SIGNATURE`; an unrecognized event
     type (e.g. `order.paid`) → 200, no-op; a webhook for an unknown
     `order_id` → 404 `PAYMENT_NOT_FOUND` (deliberately retry-worthy, not
-    200 — see claude.md §97 for why); `payment.failed` for a ride's
+    200 — see the decision log (§18) for why); `payment.failed` for a ride's
     posting fee → `PENDING_PAYMENT -> CANCELLED`; `payment.failed` for a
     booking holding the ride's last 2 seats → booking ->
     `PAYMENT_FAILED` and the ride's seats correctly released
@@ -1501,74 +764,23 @@ case found above.
 
 ------------------------------------------------------------------------
 
-# 15. Phase 11 --- Cancellation, Refunds, Settlement
+## 12. Cancellation, refunds and settlement (Phase 11)
 
-## Goal
+Driver cancellation cascading into every booking on the ride, the time-based
+commission refund policy, and collection of the final 90%.
 
-Implement all money/state transitions.
+The cascade is one transaction: cancel the ride, then cancel each active booking
+while branching on *its own* return value rather than the snapshot read a moment
+earlier — a passenger may be self-cancelling concurrently. Refund intents are
+recorded as `PENDING` transactions inside that transaction; the actual gateway
+call happens afterwards as a retryable job, because external calls never belong
+inside a transaction.
 
-### Passenger cancellation
-
-``` text
-booking -> CANCELLED
-seat -> released
-10% prepaid -> retained
-```
-
-unless future policy changes.
-
-### Driver cancellation
-
-``` text
-ride -> CANCELLED
-all confirmed bookings -> CANCELLED
-passenger prepayments -> refunded
-driver posting fee -> refund based on cancellation time
-```
-
-Driver posting fee rule:
-
-``` text
->= 18 hours before departure:
-    2% of the posting fee refunded
-    remaining 3% retained
-
-< 18 hours:
-    full 5% posting fee retained
-```
-
-Use centralized policy logic.
-
-## Final payment
-
-After ride completion:
-
-``` text
-10% already prepaid
-90% remaining
-```
-
-Application commission:
-
-``` text
-3%
-```
-
-Driver share:
-
-``` text
-97%
-```
-
-Example:
-
-``` text
-Fare = ₹500
-Platform = ₹15
-Driver = ₹485
-```
-
-The final settlement must use the fare locked to the booking/ride.
+Two gaps were closed here. One had been flagged and deferred in Phase 10: a
+payment captured *after* its booking already expired now creates a refund rather
+than only logging a warning. The other was found in this phase and had not been
+flagged at all — nothing stopped a passenger cancelling a confirmed booking after
+the ride had started, which would dodge the final payment entirely.
 
 ## Status: complete
 
@@ -1733,80 +945,17 @@ any of the new events (`RefundProcessed`, etc. — Phase 12).
 
 ------------------------------------------------------------------------
 
-# 16. Phase 12 --- Notification System
+## 13. Notifications (Phase 12)
 
-## Goal
+Push delivery through FCM behind a `PushProvider` interface, plus a persisted
+in-app notification history.
 
-Build asynchronous notifications.
-
-Infrastructure:
-
-``` text
-Redis
-BullMQ
-FCM
-```
-
-Create:
-
-``` text
-NotificationService
-NotificationRepository
-NotificationWorker
-```
-
-Store notification history in PostgreSQL.
-
-Create:
-
-``` text
-user_devices
-notifications
-```
-
-## Events/jobs
-
-Initial events:
-
-``` text
-BookingConfirmed
-BookingCancelled
-RideCancelled
-RideStarting
-RideCompleted
-PaymentSuccessful
-PaymentFailed
-RefundProcessed
-```
-
-Flow:
-
-``` text
-Business operation
-      ↓
-Event / job
-      ↓
-BullMQ
-      ↓
-Worker
-      ↓
-FCM
-```
-
-Do not block API requests waiting for FCM.
-
-## Reliability
-
-Implement:
-
-``` text
-retry
-backoff
-bounded attempts
-idempotent jobs
-invalid token cleanup
-structured logging
-```
+Persistence and delivery are separate steps on purpose. The notification row is
+upserted first, keyed by an id generated at *enqueue* time so retries are
+idempotent — an id generated in the worker would differ on every attempt and
+create duplicates. Delivery is then attempted and allowed to throw, so BullMQ's
+bounded backoff applies. A push failure can never prevent the in-app record from
+existing.
 
 ## Status: complete
 
@@ -1816,14 +965,14 @@ an FCM `PushProvider` abstraction (`src/infrastructure/fcm/`), and a new
 `20260812182449_notifications` (`UserDevice`, `Notification`,
 `DevicePlatform`, `NotificationType`).
 
-`PushProvider` (claude.md §17/§37-style strategy interface): `send(tokens,
+`PushProvider` (spec §17/§37-style strategy interface): `send(tokens,
 payload): Promise<PushSendResult[]>`, resolving per-token success/
 invalid-token outcomes rather than throwing per token (real FCM behavior —
 stale tokens are routine), only throwing for a genuine gateway-level
 failure. `FirebasePushProvider` uses the real `firebase-admin` SDK
 (`sendEachForMulticast`, deliberately using the deprecated `tokens` field
 over the newer FID-based API since our domain model is registration
-tokens, matching claude.md §45's `user_devices.device_token`).
+tokens, matching spec §45's `user_devices.device_token`).
 `ConsolePushProvider` is the local-dev fallback (logs instead of sending,
 always reports success), selected the same way Resend/Razorpay's
 factories already do (`infrastructure/fcm/index.ts`).
@@ -1845,9 +994,9 @@ key still in `.env`.
 **Notification delivery pipeline** (`notificationService.ts`): every
 `notify*` function (one per `NotificationType`, each owning its own
 title/body copy rather than a shared template registry with a single
-call site apiece, claude.md §86) enqueues a `deliver-notification` BullMQ
+call site apiece, spec §86) enqueues a `deliver-notification` BullMQ
 job with a deterministic `id` generated at enqueue time. The worker
-(`processNotificationJob`) does two independent steps, per claude.md §46
+(`processNotificationJob`) does two independent steps, per spec §46
 ("FCM delivery and notification persistence are separate concerns"): (1)
 `notificationRepository.upsert` — idempotent by that same `id`, so a
 BullMQ retry's persistence step is a no-op rather than a duplicate row;
@@ -1855,7 +1004,7 @@ BullMQ retry's persistence step is a no-op rather than a duplicate row;
 left to throw on a genuine gateway failure so BullMQ's retry/backoff
 (`attempts: 5`, exponential) retries the *whole* job — safe because step
 (1) is already idempotent. Tokens FCM reports invalid are removed
-(`userDeviceRepository.removeTokens`, claude.md §45 — deletion, since
+(`userDeviceRepository.removeTokens`, spec §45 — deletion, since
 `user_devices` has no status field in the given schema).
 
 **Event wiring** — one `notify*` call added at each transition, into
@@ -1891,8 +1040,8 @@ or nonexistent).
 blocking)**: the very first `prisma migrate dev` run for this phase's
 schema change failed the shadow-database replay with `relation
 "rides_origin_gist" already exists` — root cause was Phase 11's own fix to
-this exact problem (`20260812171513_settlement_and_refunds`, claude.md
-§97 2026-08-14) had re-added a plain `CREATE INDEX` for the two hand-
+this exact problem (`20260812171513_settlement_and_refunds`, the decision log,
+2026-08-14) had re-added a plain `CREATE INDEX` for the two hand-
 written `rides` GiST indexes, which collides on a *fresh* database replay
 since the original migration (`20260812123854_ride_creation`) already
 creates them earlier in the same replay — Phase 11's fix only worked
@@ -1908,7 +1057,7 @@ migration's SQL the same way. Both fixes applied without a destructive
 checksums were updated directly (`UPDATE _prisma_migrations SET
 checksum = ...`, computed via `shasum -a 256` of the corrected file) to
 match the corrected SQL, preserving all existing dev data. Added a
-standing process rule (steps.md §28) so this doesn't need rediscovering
+standing process rule (§21 (Migration procedure)) so this doesn't need rediscovering
 in Phase 13+: always `prisma migrate dev --create-only`, inspect for
 these two `DROP INDEX` statements, strip them before applying.
 
@@ -1941,10 +1090,10 @@ until then `ConsolePushProvider` handles it transparently.
 
 Not built in this phase, intentionally out of scope: the `PaymentSuccessful`/
 `PaymentFailed`/`RefundProcessed` naming in steps.md's own event list above
-was reconciled against claude.md §44's authoritative `NotificationType`
+was reconciled against spec §44's authoritative `NotificationType`
 enum (`PAYMENT_SUCCESS`/`PAYMENT_FAILED`/`REFUND_PROCESSED`, plus
-`RIDE_BOOKED` which steps.md's list omits but claude.md §44 includes) —
-claude.md is the architectural source of truth per §1, so its 9-value
+`RIDE_BOOKED` which steps.md's list omits but spec §44 includes) —
+the design spec is authoritative here, so its 9-value
 enum was implemented as-is. No notification-preferences/opt-out system
 (not specified), no digest/batching (each event is its own immediate
 notification, matching "do not block... waiting for FCM" §42's
@@ -1952,53 +1101,15 @@ real-time framing).
 
 ------------------------------------------------------------------------
 
-# 17. Phase 13 --- Chat
+## 14. Driver–passenger chat (Phase 13)
 
-## Goal
+Socket.IO messaging scoped to a ride, with a Redis adapter so the design survives
+multiple instances before it ever runs on them.
 
-Implement passenger-driver chat.
-
-Use:
-
-``` text
-Socket.IO
-```
-
-Entities:
-
-``` text
-Conversation
-Message
-```
-
-A conversation is associated with a ride.
-
-Only authorized driver/passenger participants may join.
-
-## WebSocket flow
-
-``` text
-connect
-  ↓
-authenticate
-  ↓
-authorize
-  ↓
-join conversation
-  ↓
-send message
-  ↓
-persist
-  ↓
-emit
-```
-
-Do not allow a user to join arbitrary conversation IDs.
-
-## Multi-instance readiness
-
-When running multiple backend instances, use Redis-backed Socket.IO
-adapter/backplane.
+One conversation exists per `(ride, passenger)` pair rather than one room per
+ride, enforced by a unique constraint, so the driver talks to each passenger
+separately. Participation is re-checked on every `send_message`, not only on
+`join_conversation` — a client can emit a send without ever having joined.
 
 ## Status: complete
 
@@ -2011,7 +1122,7 @@ creates an explicit `http.Server` (so both HTTP and WebSocket traffic share
 one port) instead of relying on `app.listen()`'s internal one.
 
 **One conversation per (ride, passenger) pair**, not one shared room per
-ride — `claude.md` §47's conceptual schema (`ride_id`, `driver_id`,
+ride — spec §47's conceptual schema (`ride_id`, `driver_id`,
 `passenger_id` on one `conversations` row) already implies this: the driver
 talks to each passenger separately. Enforced by a `@@unique([rideId,
 passengerId])` constraint. `driverId` is denormalized from `ride.driverId`
@@ -2027,14 +1138,14 @@ via the unique constraint, so a second booking by the same passenger on the
 same ride reuses the existing conversation. Not gated on booking/payment
 status — either party may reasonably want to talk before payment confirms.
 
-**REST endpoints beyond what claude.md §47/§51 explicitly lists** — `GET
+**REST endpoints beyond what spec §47/§51 explicitly lists** — `GET
 /api/v1/conversations` (list the caller's conversations, newest-first,
 cursor-paginated, each with a `counterpart` {id, name} and `lastMessage`
 preview) and `GET /api/v1/conversations/:id/messages` (cursor-paginated
 history). §47 only specifies the WebSocket flow and entities, not a REST
 surface, but a chat client has no way to discover conversation IDs or load
 history without one — engineering necessity, not a business-policy
-invention (claude.md §90/§26: same cursor-pagination shape as
+invention (spec §90/§26: same cursor-pagination shape as
 notifications/ride-search, `{items, nextCursor}`, opaque base64url cursor).
 Message *sending* stays WebSocket-only, matching §47's diagram exactly — no
 REST POST-message endpoint exists.
@@ -2061,12 +1172,12 @@ only by authorized sockets) — never broadcast wider.
 independently load-tested against a second running instance in this phase
 (no second instance was stood up) — the adapter wiring itself was verified
 correct (server boots cleanly, no adapter connection errors in logs) and is
-the same pattern claude.md documents (§67) and BullMQ already uses
+the same pattern the spec documents (§67) and BullMQ already uses
 elsewhere in this codebase (`infrastructure/queue/connection.ts`) for the
 same "needs its own Redis connection" reason.
 
 No migration drift beyond the third recurrence of the standing `rides`
-GiST-index issue (steps.md §28) — stripped the same two spurious `DROP
+GiST-index issue (§21 (Migration procedure)) — stripped the same two spurious `DROP
 INDEX` statements from this migration's generated SQL before applying, per
 the existing process rule. No other schema drift.
 
@@ -2098,180 +1209,29 @@ lint`, and `npm run build` all pass.
 
 Not built in this phase, intentionally out of scope: read receipts beyond
 the `readAt` column already existing on `Message` (no endpoint sets it —
-claude.md §47 doesn't specify a mark-read flow for chat, unlike
+spec §47 doesn't specify a mark-read flow for chat, unlike
 notifications' explicit `PATCH .../read`, so none was invented); typing
 indicators/presence (not specified); push notifications for new chat
-messages (claude.md §44's `NotificationType` enum has no chat-message
+messages (spec §44's `NotificationType` enum has no chat-message
 value — out of scope per the same "don't invent business requirements"
 reasoning as Phase 12's notes).
 
 ------------------------------------------------------------------------
 
-# 17.5. Phase 13.5 --- AI Support Chatbot
+## 15. AI support chatbot (Phase 13.5)
 
-## Goal
+A support assistant that answers questions about how Rydex works and looks up the
+caller's own bookings and rides, behind an `AIProvider` interface.
 
-Implement an AI-assisted support chatbot for general Rydex help and
-basic account-context support, kept fully independent of the
-passenger-driver chat built in Phase 13. See `claude.md` §96.5 for the
-full architectural design — this phase implements it.
+The interesting part is the authorization boundary. The tool schemas exposed to
+the model contain **no identity parameter at all** — only resource ids. The
+executor binds the user id from the authenticated session and calls the same
+ownership-checked service methods the REST API uses. Whether a user may see a
+resource is therefore never a question the model is asked or able to answer.
 
-This is a SUPPORT / USER-HELP chatbot, not the passenger-driver chat.
-It shares no module, no data model, and no routes with `src/modules/
-chat/`. `SupportConversation`/`SupportMessage` are separate entities
-from `Conversation`/`Message`.
-
-## Module and infrastructure layout
-
-``` text
-src/modules/support/
-    controllers/
-    services/
-    repositories/
-    schemas/
-    prompts/
-    routes.ts
-
-src/infrastructure/ai/
-    aiProvider.ts
-    geminiAiProvider.ts
-    consoleAiProvider.ts
-    index.ts
-```
-
-## Database
-
-``` text
-support_conversations
-support_messages
-```
-
-One migration, following the existing one-migration-per-feature
-convention. Watch for the standing `rides` GiST-index migration-drift
-issue (§28) even though this migration doesn't touch `rides` —
-confirmed to recur on unrelated schema changes, so always
-`prisma migrate dev --create-only` and inspect the generated SQL
-before applying.
-
-## AIProvider abstraction
-
-``` text
-AIProvider
-   |
-   +-- GeminiProvider (initial, official @google/genai SDK)
-```
-
-Selected via `AI_PROVIDER` env var, wired through
-`infrastructure/ai/index.ts` exactly like `infrastructure/maps/
-index.ts` and `infrastructure/payments/index.ts`. `ChatbotService`
-imports only the interface-typed singleton, never `GeminiProvider`
-directly. Uses the official SDK rather than raw `fetch` — the
-tool-calling protocol is intricate enough (function-call/
-function-response turns, JSON-schema tool definitions) that the vendor
-SDK is worth the dependency, same trade-off `RazorpayProvider` made for
-signature verification (steps.md §14 / claude.md §37). When
-`GEMINI_API_KEY` is unset, fall back to a `ConsoleAIProvider` (logs
-instead of calling out), same configured-vs-console pattern as
-`infrastructure/resend/index.ts` and `infrastructure/fcm/index.ts` —
-no real key required for local dev.
-
-Originally speced with Grok/xAI as the initial provider (see
-`claude.md` §97, corrected before implementation) — a Gemini API key is
-what's actually available, so `GeminiProvider` ships first. `AIProvider`
-makes this a pure infrastructure swap; nothing else in this phase's
-plan changes.
-
-## Tool / context layer
-
-``` text
-ChatbotService
-   |
-AIProvider.complete() with tool definitions
-   |
-model requests a tool call
-   |
-backend executes ONLY a whitelisted, ownership-checked function
-   |
-tool result fed back to the model (bounded to
-SUPPORT_CHAT_MAX_TOOL_ROUNDS rounds)
-   |
-final text response
-```
-
-Initial tool registry (all take the authenticated user's ID from
-server-side session state, injected by the tool executor — never a
-parameter the model can set):
-
-``` text
-getMyRecentBookings(userId)
-getBookingStatus(userId, bookingId)
-getMyRecentRidesAsDriver(userId)
-getRideStatus(rideId)
-```
-
-`getMyRecentBookings`/`getMyRecentRidesAsDriver` are new read-only
-service methods (`bookingService`/`rideService` currently only have
-single-record lookups, not "list mine"). `getBookingStatus`/
-`getRideStatus` reuse the existing `bookingService.getBooking`/
-`rideService.getRide`. Payment/refund status tools follow the same
-pattern, reusing `paymentService`/cancellation-settlement code from
-Phases 10/11 (already implemented by this point in the build order).
-
-## Knowledge / FAQ
-
-Build the system prompt's Rydex-specific facts (commission %,
-prepayment %, cancellation policy, search radius) from the same
-config/business-rule constants used elsewhere (§85) — do not duplicate
-magic numbers in a separate FAQ file. No vector DB / RAG at this
-stage.
-
-## API
-
-``` text
-POST /api/v1/support/conversations
-GET  /api/v1/support/conversations
-GET  /api/v1/support/conversations/:id
-POST /api/v1/support/conversations/:id/messages
-```
-
-Synchronous HTTP request/response — no BullMQ queue for the chat turn
-itself. Authenticated; ownership-checked the same way `GET /bookings/
-:id` and `GET /conversations/:id/messages` already are — a
-non-participant gets `SUPPORT_CONVERSATION_NOT_FOUND`, not a
-distinguishable "forbidden" (existence isn't leaked).
-
-## Safety
-
-``` text
-tool layer enforces ownership regardless of what the model asks for
-system prompt defines the assistant's identity and scope
-model never invents fares, refunds, booking/payment status
-```
-
-## Cost control
-
-``` text
-per-user + per-IP rate limiting (reuse infrastructure/redis/
-    rateLimit.ts, same factory auth/routes.ts already uses)
-max message length
-max conversation history sent to the provider
-provider timeout
-bounded tool-call rounds
-optional daily per-user message cap
-```
-
-## Out of scope for this phase
-
-``` text
-human support escalation UI/queue (schema leaves room via
-    SupportConversation.status = ESCALATED, nothing more)
-RAG / vector search
-automated tests
-dedicated logging/observability infrastructure
-    (no logger exists anywhere in the repo yet; this phase does not
-    introduce one either — errors flow through the existing
-    errorHandler middleware like every other module)
-```
+That boundary was tested directly: asked to fetch another user's booking with a
+prompt asserting "it is my booking", the tool layer refused and the assistant
+reported not-found, leaking nothing.
 
 ## Status: complete
 
@@ -2283,7 +1243,7 @@ in this codebase uses), and the full `src/modules/support/` module wired
 at `/api/v1/support`.
 
 **Provider is Gemini, not Grok** — corrected before implementation (see
-`claude.md` §97, 2026-08-16) since a Gemini API key is what was actually
+the decision log, 2026-08-16) since a Gemini API key is what was actually
 available. `ChatbotService` imports only the interface-typed singleton, so
 this was a pure infrastructure choice; nothing in the module changed.
 
@@ -2379,47 +1339,24 @@ Postgres that both spatial indexes survived.
 
 ------------------------------------------------------------------------
 
-# 18. Phase 14 --- Security + Rate Limiting
+## 16. Security and rate limiting (Phase 14)
 
-## Goal
+An audit phase rather than a feature phase — no new module, table, migration or
+dependency, and only one new file.
 
-Harden the application.
+Rate limiting existed for OTP and AI chat but nowhere else, not by decision but
+because no earlier phase had forced the question. It now covers every category,
+reusing the same limiter factory. Two related fixes came out of the same pass:
+the limiter's `INCR` + `EXPIRE` became a single Lua script (the two-command
+version could leave a counter with no TTL — a permanent lockout), and
+`verifyAccessToken` began actually checking the `type: 'access'` claim it had
+only been casting.
 
-Implement/verify:
-
-``` text
-Helmet
-CORS
-input validation
-rate limiting
-throttling
-authorization
-secure cookies/headers where applicable
-token security
-webhook signature validation
-Cloudinary upload validation
-secret management
-```
-
-## Rate-limit categories
-
-At minimum consider:
-
-``` text
-OTP request
-OTP verification
-ride search
-ride creation
-booking
-payment creation
-login/auth endpoints
-WebSocket connection
-AI support chat
-```
-
-Use Redis so limits work across multiple backend instances.
-
-Test HTTP 429 behavior.
+The phase also settled two deliberate positions: rate limiting fails *open* on a
+Redis outage, because an outage must degrade abuse protection rather than take
+down the API; and `TRUST_PROXY` defaults to `false`, which is the correct value
+without a proxy in front, since trusting `X-Forwarded-For` unguarded lets any
+client mint a fresh rate-limit bucket per request.
 
 ## Status: complete
 
@@ -2438,7 +1375,7 @@ search, ride creation, booking, payment/webhook, `/auth/refresh`+`/logout`,
 document upload, and WebSocket connections had none. All now use the same
 `rateLimit()` factory (`infrastructure/redis/rateLimit.ts`) — no second
 limiter was introduced — with every limit as its own `*_RATE_LIMIT_*` env var
-(claude.md §49: configurable, never magic numbers). Limits are keyed per user
+(spec §49: configurable, never magic numbers). Limits are keyed per user
 where the route is authenticated and per IP where it isn't. The document-upload
 limit is shared by the vehicle and user upload endpoints via
 `app/middleware/rateLimits.ts`, so a user can't get double the allowance by
@@ -2550,20 +1487,15 @@ Left as written because this records what was true at the time; see §19/§20.)*
 
 ------------------------------------------------------------------------
 
-# 19. Phase 15 --- Verification + Hardening
+## 17. Verification and hardening (Phase 15)
 
-## Goal
+The phase was originally specified as building unit, integration, API,
+concurrency and failure test suites. It was completed differently, and the
+difference is stated plainly rather than papered over: the verification those
+suites were meant to provide was performed by driving the running application
+against the real stack, but **no test framework was introduced**.
 
-Reach deployment-level confidence in the backend through comprehensive
-manual/runtime verification, regression testing, security auditing,
-concurrency checks and failure-path inspection --- **without** introducing
-persistent automated testing infrastructure at this stage.
-
-This is a deliberate deviation from how this phase was originally written
-(it specified unit/integration/API/concurrency/failure *test suites*). The
-verification work those suites were meant to provide was performed, but by
-driving the running application directly rather than by committing a test
-framework. See "Status" below for exactly what that does and does not mean.
+What follows is the record of what was actually exercised.
 
 ## How verification was performed
 
@@ -2701,7 +1633,7 @@ second full verification pass over Phases 0-14
 
 Pass 2 additionally found two defects that pass 1 had not (a permanent
 BullMQ worker stall after a Redis outage, and Redis clients without error
-listeners); both were fixed and re-verified the same way. See claude.md §97
+listeners); both were fixed and re-verified the same way. See the decision log (§18)
 for the full record of every bug found and fixed.
 
 ## Failure-path verification
@@ -2758,9 +1690,890 @@ outstanding.
 
 ------------------------------------------------------------------------
 
-# 20. Phase 16 --- Render + Supabase + Upstash Deployment
+---
 
-## Goal
+## 18. Ratings (Phase 15.5)
+
+The one feature that existed as scaffolding rather than as nothing. Two columns
+(`users.rating_average`, `rating_count`) had been in the schema since the very
+first migration, and two consumers already read them — the fare strategy's
+bounded multiplier and the `DRIVER_RATING` search sort. **Nothing wrote them.**
+The practical effect was that every driver's multiplier resolved to exactly
+`1.0` and `DRIVER_RATING` collapsed onto the `r.id` tie-breaker, so both features
+were present in the code and inert in production.
+
+Building the write path meant three decisions, none of them obvious:
+
+**Bidirectional, with separate reputations.** A passenger rates the driver and
+the driver rates the passenger — but the two scores are kept in separate column
+pairs rather than one blended average. The fare multiplier and the search sort
+read the *driver* figure, and blending in someone's conduct as a passenger would
+price rides on the wrong signal. That forced the existing columns to be renamed
+role-scoped rather than reused as-is.
+
+**Eligibility gates on the ride, not the booking.** A booking only reaches
+`COMPLETED` when its final-payment webhook succeeds, and no reconciliation job
+exists to recover a payment whose webhook never arrived — gating on the booking
+would have let a payment failure make a trip permanently unrateable for a
+passenger who did nothing wrong. Gating on `ride.status = COMPLETED` avoids
+coupling reputation to a payment outcome the rater doesn't control.
+
+**The aggregate is folded in by a single atomic `UPDATE`.** The denormalised
+average has to stay a column because the fare path reads it synchronously during
+ride creation. Maintaining it the obvious way — read, compute in Node, write back
+— is a lost update waiting to happen. Computing the new average inside the
+statement puts the read under the lock the `UPDATE` already takes, which is the
+same shape `reserveSeats` uses for seats.
+
+Ratings hang off the booking rather than the ride, because a booking is exactly
+the unit two people shared a trip through — which is what lets "one rating per
+participant per trip" be a `UNIQUE (booking_id, rater_id)` constraint rather than
+an application check that races.
+
+## Status: complete
+
+New `src/modules/rating/` (schemas, repository, service, controller), routed
+under `bookings/:id/ratings` on the existing booking router — the same wiring
+arrangement `rideRouter` already uses for booking creation.
+
+One endpoint serves both directions because the direction is *derived* from the
+booking plus `req.user.id`; the request body carries only a score and an optional
+comment, with no identity field to spoof. A repeat submission is rejected with
+`409 ALREADY_RATED` rather than replayed — an idempotency key exists so a retried
+side effect happens once, but a rating is a one-time opinion, and silently
+returning the original would hide that a second, different score was discarded.
+
+**The migration hit the standing spatial-index hazard for the third time.**
+`prisma migrate diff` proposed dropping *both* `rides` GiST indexes on a
+migration that does not touch `rides` at all, and separately proposed
+`DROP COLUMN`/`ADD COLUMN` for the two renamed columns because Prisma cannot
+infer a rename. Both were corrected by hand before applying; the file records
+why. Verified after applying that both GiST indexes still exist and all eight
+user rows survived.
+
+Runtime verification:
+
+``` text
+both directions            passenger→driver and driver→passenger, aggregates
+                           exact ((5+4)/2 = 4.50; separate pairs, no bleed)
+concurrency                8 simultaneous ratings for one driver → stored
+                           average matched a recomputed AVG() exactly (4.25/8),
+                           zero lost updates
+duplicate submission       409 ALREADY_RATED, aggregate unmoved
+ride not completed         409 RIDE_NOT_COMPLETED
+non-participant            404 BOOKING_NOT_FOUND (not 403 — no existence leak)
+score 0 / 6 / 4.5          400 VALIDATION_ERROR
+malformed booking id       400, never a driver-level 500
+consumers came alive       search returns a real rating; fare band measured at
+                           251 (1★) / 265 (unrated) / 278 (5★) — the ±5% bound
+```
+
+------------------------------------------------------------------------
+
+# 19. Decision log
+
+Dated record of every decision that changed after the initial design, every
+reversal, and every bug whose root cause turned out to be architectural rather
+than local. Kept because the reasoning is worth more than the conclusion — and
+because several of these mistakes are easy to make twice.
+
+Recurring themes worth noticing across the entries below:
+
+- **Provider swaps stayed cheap.** Mapbox → Geoapify and Resend → Brevo each
+  touched one directory plus config, which is the entire justification for the
+  provider interfaces.
+- **Two bugs were structural, not local.** The BullMQ workers sharing one Redis
+  connection, and ioredis buffering commands during an outage instead of failing
+  them, both hid behind healthy-path behaviour and only appeared under a real
+  outage.
+- **The same migration hazard recurred twice.** Prisma silently proposes dropping
+  the hand-written spatial indexes on any migration touching `rides`, because it
+  has no record that `Unsupported` geography columns have indexes.
+- **Several fixes came from swapping something else.** Rewriting the email
+  provider is what exposed that every OTP delivery failure had been silently
+  swallowed while the endpoint returned 200.
+
+A note on `§N` references: entries below cite section numbers from the earlier
+single-file version of the architecture document, as do comments throughout
+`src/`. That document was later split — its architecture content is now
+[`docs/architecture.md`](./docs/architecture.md) and its rules are `claude.md`
+§1–§14. The original numbers are preserved here rather than rewritten, because
+the source comments reference them.
+
+### 2026-08-10
+
+-   **Search radius fixed to 10 km.** §1 said ~8 km while §20, §22,
+    §85, and `steps.md` Phase 8 all said 10 km. 10 km was correct
+    everywhere except §1; §1 has been corrected to match.
+-   **Seat reservation clarified as Postgres-decrement-at-creation.**
+    §35/§36 were ambiguous about whether `available_seats` decrements
+    at booking creation or at payment confirmation. Resolved:
+    decrement happens at booking creation (`PENDING_PAYMENT`, row
+    locked), released by a TTL-based BullMQ expiry job if payment
+    doesn't complete. Redis is not a second source of seat holds.
+-   **Ride creation gets a `PENDING_PAYMENT` status.** §18 required
+    "confirm required payment" before persisting the ride, but §40
+    establishes payment confirmation as async/webhook-driven. Ride's
+    state machine (§19) now has `PENDING_PAYMENT -> OPEN`, mirroring
+    Booking's existing pattern.
+-   **Vehicle eligibility for ride creation stays simple.** Ownership +
+    `ACTIVE` status + seat capacity only — not gated on
+    `verification_status`.
+-   **Admin verification dashboard added to scope.** §13/§87
+    originally excluded any admin verification workflow from the MVP.
+    That is reversed: admins now manually verify vehicle documents via
+    a dashboard (§96). This does not gate ride creation (previous
+    bullet) — it's scope-additive, not a reversal of the "keep it
+    simple" principle elsewhere in this document.
+
+### 2026-08-11
+
+-   **Driver upgrade path resolved.** steps.md flagged (Phase 3) that
+    every signup lands as `PASSENGER` with no way to become `DRIVER`,
+    blocking Phase 5 end-to-end. Resolved: a `PASSENGER` submits a
+    driving-license document; an admin reviews and approves/rejects it
+    through the Admin Module (§96); approval atomically sets
+    `role -> DRIVER` and `driver_license_status -> VERIFIED`. See §8
+    ("Becoming a DRIVER") and §96 for the full flow, endpoints, and
+    data model.
+-   **Vehicle verification now gates ride creation — this reverses the
+    2026-08-10 decision above ("Vehicle eligibility for ride creation
+    stays simple").** Explicit product decision, made when asked
+    directly: a vehicle must have `verification_status = VERIFIED`
+    (admin-approved, §96) before it can be selected to create a ride,
+    on top of ownership + `ACTIVE` status + seat capacity. §8 and §96
+    have been updated to match; §18's ride-creation flow and its
+    eligibility function must include this check when Phase 7 is
+    implemented.
+
+### 2026-08-12
+
+-   **Initial `MapProvider` implementation changed from Mapbox to
+    Geoapify.** §17 named Mapbox as the initial implementation. In
+    practice, Mapbox's account signup now requires a payment method
+    before any free-tier usage is unlockable, which conflicts with an
+    explicit product constraint: no payment method on file with any
+    mapping/location vendor. Researched alternatives (Mapbox, Google
+    Maps Platform, HERE, TomTom, MapTiler, OpenRouteService, LocationIQ,
+    self-hosted OSRM+Nominatim) against that constraint plus free-tier
+    limits, commercial-use terms, and fit for ~10k users (§92); Geoapify
+    was selected as the initial `MapProvider` implementation (no card
+    required, 3,000 credits/day, commercial use allowed with
+    attribution, single API covering geocode/reverseGeocode/route/
+    distance-matrix). OpenRouteService is a documented fallback if
+    Geoapify's quota becomes constraining; self-hosting OSRM+Nominatim
+    is the eventual no-limits option, deferred until traffic actually
+    warrants the operational overhead. The `MapProvider` interface
+    itself (§17) is unchanged — this is a Strategy-pattern provider
+    swap, exactly what the interface exists to make cheap.
+
+### 2026-08-13
+
+-   **Booking gets one `status` column, not `booking_status` +
+    `payment_status`.** §32 listed both as separate fields, but §33's
+    state list (`PENDING_PAYMENT`/`PAYMENT_FAILED` alongside
+    `CONFIRMED`/`CANCELLED`/`COMPLETED`) is a single state machine
+    describing one lifecycle, not two independent ones — and that's
+    exactly the design Ride already settled on (one `status` column,
+    no separate `payment_status`, §19). Resolved the same way, for
+    consistency: one `status` column on `bookings` too. A `payments`
+    row's own `status` (§38, Phase 10) remains the source of truth for
+    gateway-level payment-attempt detail. §32 updated to match.
+-   **Booking pickup/drop implemented as plain lat/lng, not PostGIS
+    geography.** §32 said "where appropriate" — Phase 9 has no
+    `ST_DWithin`/`ST_Distance` query against a booking's pickup/drop
+    point (unlike Ride's origin/destination, which exist because of
+    ride search, §20-§23), so the `Unsupported`-type/raw-SQL machinery
+    Ride needed for a real reason isn't justified here. Plain `Float`
+    columns, normal Prisma Client access throughout
+    `bookingRepository.ts`. Revisit if a future requirement (e.g.
+    matching bookings by pickup proximity) actually needs it.
+-   **First BullMQ queue stood up in Phase 9, not Phase 12 as
+    originally sequenced.** §43's queue infrastructure was planned
+    for the Notification module (steps.md Phase 12), but Phase 9's own
+    "Reservation expiry" section requires a BullMQ delayed job to
+    release a `PENDING_PAYMENT` booking's seat hold if payment never
+    completes — there's no way to build seat-hold expiry without it.
+    Added `bullmq` as a dependency and
+    `src/infrastructure/queue/` (a dedicated BullMQ-configured Redis
+    connection, one `booking-expiry` queue) in Phase 9 instead of
+    waiting for Phase 12. Phase 12 reuses this same infrastructure for
+    its own queues rather than standing up a second, parallel one.
+-   **`PaymentProvider.createOrder()` reused for the 10% passenger
+    prepayment, mirroring Ride's posting-commission flow exactly.**
+    No new payment-provider work was needed — Phase 7 already built
+    the `StubPaymentProvider` (§37, 2026-08-12) generically enough that
+    Booking creation calls the same interface for a different purpose
+    (prepayment instead of posting commission). Confirms the interface
+    is doing its job as a real seam, not just for Ride.
+-   **Payment and Transaction rows are created together, always, by one
+    service (`paymentRecordService`) — never independently.** §38 frames
+    them as two separate concepts (gateway attempt vs. business record)
+    but doesn't explicitly say whether both get written at order-creation
+    time or only Transaction at confirmation time. Resolved: both are
+    created together at order-creation (Payment status `CREATED`,
+    Transaction status `PENDING`), and both are resolved together when
+    the webhook fires — so failed attempts get a financial-history
+    record too, not just successes, matching §38's "financial
+    history/reconciliation record" framing more literally than
+    "only record what succeeded" would.
+-   **Real gap found during testing: a payment that succeeds *after* its
+    booking's seat-hold TTL already expired was silently inconsistent.**
+    If Razorpay's `payment.captured` webhook arrives after
+    `bookingExpiryService`'s BullMQ job already cancelled the booking and
+    released the seat (a genuine race — confirmed by triggering it via a
+    short test TTL), the webhook correctly recorded the Payment/
+    Transaction as `SUCCESS` (the money did move) but
+    `bookingRepository.confirmPayment`'s conditional update silently
+    no-ops (the booking is no longer `PENDING_PAYMENT`), leaving no
+    signal that a passenger was charged for a booking that no longer
+    holds a seat. Resolved *for this phase*: `webhookService` now checks
+    `confirmPayment`'s/`rideRepository.confirmPayment`'s return value and
+    logs an explicit error flagging the case for manual refund review.
+    A full automatic fix (issuing a refund, or race-proofing the TTL job
+    against a concurrently-resolving webhook via a correlated-subquery
+    conditional update) is *not* built — the correct resolution requires
+    real refund policy/mechanics that don't exist until Phase 11
+    (§31/§34/§59), and a sane default `BOOKING_PAYMENT_TTL_SECONDS`
+    (900s) makes the race rare in practice. Revisit when Phase 11 adds
+    refund handling.
+-   **Retroactive Phase 9 cleanup: cancel the scheduled BullMQ expiry job
+    on any terminal booking transition, not just when it fires.**
+    `bookingExpiryService.cancelScheduledBookingExpiry` (new) is called
+    after webhook-driven confirm/fail (this phase) and after a manual
+    passenger cancel (Phase 9's `bookingService.cancelBooking`, patched
+    now). Purely an efficiency cleanup — the job was already safely
+    idempotent either way (§35/§36) — so this doesn't change behavior,
+    only avoids pointless later job execution.
+
+### 2026-08-14
+
+-   **Phase 11 (Cancellation, Refunds, Settlement) implemented.** Driver
+    cancellation now cascades to every active booking on the ride
+    (§31/§34/§59): a `CONFIRMED` booking's 10% prepayment is refunded in
+    full, a still-`PENDING_PAYMENT` one is just cancelled (nothing was
+    captured), and the driver's own 5% posting commission is refunded per
+    the §31/§85 time-based rule (2/5 of the captured commission if
+    cancelling `>= DRIVER_CANCEL_THRESHOLD_HOURS` before departure, else
+    nothing), only when it was actually captured. Refund intents are
+    recorded as `PENDING` `Transaction` rows inside the cancellation
+    transaction and resolved asynchronously by a new BullMQ `refund`
+    queue/worker calling the now-real `PaymentProvider.refund()`
+    (`RazorpayProvider`/`StubPaymentProvider` both previously threw, per
+    the 2026-08-13 entry above). Final payment (§41) is triggered
+    synchronously inside `POST /rides/:id/complete` (no new endpoint) —
+    the remaining 90% (from the fare locked on each `CONFIRMED` booking)
+    gets a `FINAL_PAYMENT` order per booking; the webhook flips the
+    booking to `COMPLETED` on success and computes+logs the 97/3
+    driver/platform settlement split (§84's "calculated exactly once").
+    No new schema exists to persist that split — §6 keeps a wallet/payout
+    system out of scope, and `TransactionType` is a closed enum — so it's
+    a structured log line for a future payout module to consume, not a
+    new row.
+-   **Closed the exact gap the 2026-08-13 entry above flagged and
+    deferred to this phase**: a payment webhook resolving `SUCCESS`
+    after its ride/booking already left `PENDING_PAYMENT` via the
+    cancellation cascade now creates and schedules a refund transaction
+    (reusing the same cancellation-policy calculation for the commission
+    case) instead of only logging "needs manual review." Verified via a
+    forced race (cancel first, deliver the webhook after) that this
+    never double-refunds against the cascade's own refund creation —
+    exactly one of the two paths fires, gated by each side's own
+    conditional state-transition outcome.
+-   **New gap found and closed in the same phase, not previously
+    flagged**: nothing stopped a passenger from self-cancelling a
+    `CONFIRMED` booking after the ride had `STARTED`/`COMPLETED`, which
+    would dodge the final-payment collection this phase adds.
+    `bookingService.cancelBooking` now rejects with `409
+    BOOKING_NOT_CANCELLABLE` once the ride has started, checked inside
+    the existing transaction to avoid a TOCTOU gap.
+-   **Unrelated bug found before any of the above and fixed first**:
+    `prisma migrate dev`'s diff for this phase's own `Booking.
+    finalPaymentOrderId` column also silently emitted `DROP INDEX` for
+    both hand-written `rides` GiST spatial indexes (§16) — because
+    `Ride.origin`/`destination` are `Unsupported(...)` columns (§77),
+    Prisma's schema-diff engine has no record they're supposed to exist
+    and reconciles them away as "unknown" on any unrelated `rides`-
+    adjacent migration. Confirmed both indexes were actually gone from
+    the dev DB; fixed by rewriting the generated migration file to keep
+    them and re-running the `CREATE INDEX` statements directly.
+    `EXPLAIN ANALYZE` re-confirmed both are used again. Flagged as a
+    standing risk for any future migration that touches `rides` while
+    `origin`/`destination` stay `Unsupported` — the generated SQL needs
+    to be diffed against expectations, not just trusted.
+
+### 2026-08-15
+
+-   **Phase 12 (Notification System) implemented.** New `PushProvider`
+    strategy interface (§17/§37-style) behind `src/infrastructure/fcm/`:
+    `FirebasePushProvider` (real `firebase-admin` SDK) and
+    `ConsolePushProvider` (local-dev fallback), selected the same
+    configured-vs-fallback way as every other provider in this codebase.
+    Every business event (§44's 9 `NotificationType` values) enqueues a
+    BullMQ `notification` job; the worker does persistence
+    (`notifications` table, §46) and FCM delivery as two independent
+    steps — persistence is idempotent (upsert by a deterministic id
+    generated at enqueue time), so delivery is left free to throw on a
+    real gateway failure and let BullMQ's bounded retry/backoff (§43)
+    handle it without risking a duplicate notification row. Tokens FCM
+    reports invalid are removed from `user_devices` (§45).
+-   **The exact same "recurring `rides` GiST index" issue documented in
+    the 2026-08-14 entry above recurred a second time**, confirming it's
+    genuinely structural rather than a one-off: (1) Phase 11's own fix to
+    it collided with the *original* migration on a fresh shadow-database
+    replay (both tried to create the same index — Phase 11's fix had
+    only been validated against the one already-migrated dev DB it was
+    written for, not a from-scratch environment); fixed with
+    `CREATE INDEX IF NOT EXISTS`. (2) Once that was resolved, Prisma's
+    diff engine proposed the *same* erroneous `DROP INDEX` pair again in
+    this phase's own new migration, for a schema change with nothing to
+    do with `rides`. Both fixed without a destructive `prisma migrate
+    reset` — corrected the migration files and updated their stored
+    checksums directly (`_prisma_migrations.checksum`) to match,
+    preserving all dev data. A standing process rule is now recorded in
+    §21 (Migration procedure): always `prisma migrate dev --create-only` and strip
+    these two `DROP INDEX` statements before applying, for as long as
+    `rides.origin`/`destination` stay `Unsupported`.
+-   **Real bug found and fixed during manual verification, unrelated to
+    the above**: `firebase-admin`'s `cert()` credential constructor
+    parses the private key *synchronously* and throws immediately if
+    it's not valid PEM — confirmed by an actual crash of the entire
+    process at import time against this environment's `.env` (whose
+    `FCM_PRIVATE_KEY` is not a real PEM key). Unlike Brevo/Razorpay,
+    where a bad key only fails lazily on first real API call, a bad FCM
+    key was taking down the *whole backend* — auth, rides, payments,
+    everything — over a misconfigured push credential. Fixed by wrapping
+    `FirebasePushProvider` construction in try/catch inside
+    `createPushProvider()`, falling back to `ConsolePushProvider` on any
+    construction failure (logged), exactly like the "not configured"
+    case. Re-verified the server now boots and serves traffic normally
+    with the same invalid key still in `.env`.
+    only avoids pointless later job execution.
+
+### 2026-08-16
+
+-   **AI Support Chatbot added as a new module (§96.5) and phase
+    (steps.md Phase 13.5).** Product requirement: an AI-assisted
+    support chatbot for general Rydex help and account-context support
+    (booking/ride status), kept fully separate from the existing
+    passenger-driver chat (§47, Phase 13) — different module, different
+    tables (`SupportConversation`/`SupportMessage` vs
+    `Conversation`/`Message`), different transport (HTTP vs Socket.IO).
+-   **`AIProvider` strategy interface adopted, mirroring `MapProvider`
+    (§17) and `PaymentProvider` (§37) exactly** — `ChatbotService`
+    depends only on the interface, selected via `AI_PROVIDER` env var
+    through a factory in `infrastructure/ai/index.ts`. The original
+    draft of this section named Grok/xAI as the initial implementation
+    (free/low-cost, no payment method required — the same reasoning as
+    the Geoapify choice, §97 2026-08-12); **corrected before any code
+    was written** to Gemini instead, because a Gemini API key is what's
+    actually available for development, using the official
+    `@google/genai` SDK rather than raw `fetch` (unlike
+    `GeoapifyMapProvider`) given how correctness-sensitive the
+    tool-calling protocol is — the same trade-off `RazorpayProvider`
+    already made for signature verification (§37, 2026-08-13). This
+    remains a convenience choice, not an architectural one — OpenAI,
+    Grok, and Claude remain valid future targets behind the same
+    interface with no `ChatbotService` changes.
+-   **Real LLM tool-calling chosen over server-side context injection
+    for the user-data context layer**, after considering both:
+    tool-calling is what the product requirement's "AIProvider → Tool/
+    Context Layer → domain services" diagram literally describes, and
+    Gemini's API supports native function/tool calling so this isn't
+    bolted on. The authorization boundary is enforced entirely in
+    backend code, not by prompting: tool JSON-schemas exposed to the
+    model never include a `userId`/identity parameter, only
+    resource-scoped ids (`bookingId`/`rideId`); the executor always
+    binds `userId` from the authenticated request context. The model's
+    only degree of freedom is which tool to call and which resource id
+    to pass — never who is allowed to see it.
+-   **Placed at Phase 13.5**, after Chat (13) and before Security (14).
+    The real dependency is Phases 9–12 (Booking/Payment/Cancellation/
+    Notifications) existing so the tool layer has real data to query —
+    all of which precede 13.5 regardless of Chat's position.
+-   **No human-support escalation system, RAG/vector search, automated
+    tests, or new logging infrastructure introduced in this phase** —
+    `SupportConversation.status` gaining an `ESCALATED` value plus
+    nullable `escalationReason`/`escalatedAt` fields is the only
+    concession to future escalation (mirrors how §96's admin
+    verification fields hold a decision without a full workflow
+    engine). No logger exists anywhere in this codebase yet (see
+    `README.md`); this module doesn't special-case that either — errors
+    flow through the existing `errorHandler` middleware like every
+    other module.
+-   **`AIToolCall` gained an opaque `providerState` field, added during
+    implementation for a reason the design didn't anticipate.** Newer
+    Gemini models reject any `functionCall` part replayed on a later
+    turn unless its original `thought_signature` is echoed back with it
+    — which broke every multi-turn conversation that had made a tool
+    call. Rather than leak the vendor's concept into the
+    provider-agnostic interface, `AIToolCall` carries an opaque
+    `providerState` string that `ChatbotService`/`supportRepository`
+    persist (inside the `tool_calls` JSON) and replay verbatim without
+    interpreting. Providers that don't need it never set it. This is the
+    interface absorbing a vendor requirement exactly as intended —
+    contrast `PaymentProvider.verifyWebhookSignature` (§37), which
+    solved the same class of problem by adding a *named* method because
+    the concept (webhook signing) is genuinely universal; per-turn
+    reasoning-continuation state is not.
+-   **Verified against the real Gemini API, and the ownership boundary
+    holds under direct attack**: asked to fetch another user's booking
+    id with the prompt explicitly asserting "it is my booking," the tool
+    layer refused and the assistant reported not-found, leaking nothing.
+    Asked for a driver's phone number and home address, it invented
+    nothing. Three further real bugs were found and fixed in the same
+    pass — a retired default model, Gemini rejecting non-object
+    `functionResponse.response` payloads (our tool results are often
+    JSON arrays), and `AI_PROVIDER_RATE_LIMITED` being specified in §55
+    but never actually mapped from an upstream 429. See steps.md
+    Phase 13.5 "Status: complete" for the full detail.
+
+### 2026-08-13 (Phase 14 — Security + Rate Limiting)
+
+*Dated from the actual commit date. The `2026-08-15`/`2026-08-16` headings
+above run ahead of theirs; this entry follows Phase 13.5 in sequence
+regardless of the drift.*
+
+-   **Rate limiting extended from 2 of §49's categories to all of them.**
+    Only OTP request/verify (§9) and AI support chat (§96.5) had limits;
+    ride search, ride creation, booking, payment/webhook, `/auth/refresh`,
+    document upload, and WebSocket connections had none — not by decision,
+    just because no phase's scope forced the question. All now use the
+    existing `rateLimit()` factory with per-category `*_RATE_LIMIT_*` env
+    vars (§49 "use configurable values"); no second limiter was introduced.
+    Keyed per user on authenticated routes, per IP otherwise.
+-   **`rateLimit()` fails open on Redis failure — explicit product decision
+    made when asked directly.** A Redis outage must degrade rate limiting,
+    never take down auth/rides/bookings with it. This is the same
+    availability-over-strictness trade-off `createPushProvider()` already
+    makes for a bad FCM credential (§97, 2026-08-15). The accepted exposure
+    is that brute-force protection is absent, not merely weakened, while
+    Redis is down; every fail-open is logged so the window is visible rather
+    than silent.
+-   **`TRUST_PROXY` added as a config boolean, default `false` — explicit
+    product decision.** Every per-IP limit reads `req.ip`, which is only the
+    real client when a trusted proxy sets `X-Forwarded-For`. Default-off is
+    the *correct* value today, not a placeholder: with no proxy in front,
+    trusting the header lets any client rotate it and mint a fresh
+    rate-limit bucket per request, defeating §9's OTP brute-force protection
+    entirely. Both positions were verified without needing a real load
+    balancer (see steps.md Phase 14). Flip to `true` in the same change that
+    introduces §65's ALB.
+-   **`INCR`+`EXPIRE` replaced by one Lua script.** The two-command version
+    (flagged in its own comment since Phase 3) could leave a counter with no
+    TTL if the process died between them — a permanent lockout for whoever
+    owned that key. `Retry-After` and `RateLimit-*` headers added at the same
+    time.
+-   **Real bug found during verification: fail-open didn't actually fail
+    open.** ioredis defaults to `enableOfflineQueue: true`, which buffers
+    commands issued while the connection is down instead of rejecting them,
+    so a rate-limit check against a stopped Redis *hung* — and a `try/catch`
+    cannot rescue a hang. Confirmed by stopping the container mid-request.
+    A Redis outage would have hung every rate-limited endpoint, the exact
+    opposite of the intended degradation. Fixed by racing the call against a
+    1s deadline inside `consumeRateLimit`. Disabling the offline queue
+    globally would have been wrong: OTP storage shares that connection and
+    should fail *closed*.
+-   **`verifyAccessToken` now verifies the signed `type: 'access'` claim**,
+    which §10 specifies but the code only cast, never checked. Not
+    exploitable as written (refresh tokens are random hex, not JWTs), but a
+    token signed with the access secret carrying no `type` and
+    `role: ADMIN` was demonstrably accepted before this change.
+-   **`validateParams` added** alongside `validateBody`/`validateQuery`, and
+    applied to every `:id`/`:userId` route. Every id is a Postgres
+    `@db.Uuid` (§56), so a malformed one reached the driver and surfaced as
+    a raw 500 — §87's "do not expose raw database errors to clients".
+-   **Production-config assertions added to `env.ts`** (§63/§68): refuses to
+    boot under `NODE_ENV=production` with a surviving `changeme-`
+    placeholder secret, with matching access/refresh secrets, or with a
+    localhost/wildcard `CORS_ORIGIN`. Schema validation cannot catch these —
+    the placeholders are well-formed — and development is deliberately left
+    alone.
+-   **No new module, table, migration, or dependency.** Phase 14 is an audit
+    plus applied reuse; the only new file is
+    `app/middleware/rateLimits.ts`, holding the one limit shared by two
+    modules (vehicle and user document upload) so both draw from the same
+    bucket.
+
+### 2026-08-17 (Email provider swap: Resend → Brevo)
+
+-   **`EmailProvider`'s implementation changed from Resend to Brevo, and the
+    directory was renamed `infrastructure/resend/` → `infrastructure/email/`.**
+    Product decision: consolidate on Brevo. The rename is the more important
+    half — `maps/`, `payments/`, and `ai/` are already named for the capability
+    rather than the vendor, which is the entire point of having the interface;
+    `resend/` was the odd one out, and a vendor-named folder would have needed
+    renaming again on the next swap. The `EmailProvider` interface itself is
+    unchanged, and the swap touched only that folder plus config — exactly the
+    Strategy-pattern outcome §17/§37 exist to produce.
+-   **`BrevoEmailProvider` uses raw `fetch` against Brevo's REST API v3
+    (`POST /v3/smtp/email`), not the `@getbrevo/brevo` SDK** — same reasoning as
+    `GeoapifyMapProvider`: one plain request/response with no intricate protocol
+    to hand-roll incorrectly. Contrast `RazorpayProvider` (§37) and
+    `GeminiProvider` (§96.5), which take SDKs precisely because signature crypto
+    and the tool-calling wire format are easy to get subtly wrong. Net effect:
+    the `resend` dependency was removed and nothing replaced it.
+-   **Fixed a real bug the swap exposed, which was the actual motivation.** The
+    Resend SDK resolves with `{ data, error }` rather than throwing, and
+    `resendEmailProvider.sendOtpEmail` awaited the call but ignored the returned
+    `error`. Every delivery failure — invalid key, unverified sender, exhausted
+    quota, rejected recipient — was silently discarded and
+    `POST /auth/request-otp` answered `200 "a verification code has been sent"`.
+    Confirmed against the live API: Resend returned `403` while the endpoint
+    returned `200`. `BrevoEmailProvider` now throws
+    `502 EMAIL_SEND_FAILED` on any non-2xx or network failure. Verified both
+    directions against the real Brevo API: a valid key delivers (Brevo's event
+    log shows `requests → delivered`), and a deliberately invalid key now yields
+    `502 EMAIL_SEND_FAILED` instead of a false success. This does not create an
+    account-enumeration channel (§9) — the failure is a provider/infrastructure
+    condition, reported identically whether or not the address has an account.
+-   **`AppError` gained an optional `{ cause }`.** Provider errors carry the
+    underlying failure so it survives to the error handler instead of being
+    thrown away by a bare `catch {}`. Never serialized to the client — Brevo's
+    error bodies can echo the recipient address (§61).
+-   **`assertProductionSecrets()` now refuses to boot in production without
+    Brevo and Razorpay credentials.** Previously a production deploy missing
+    them started normally and served traffic on `ConsoleEmailProvider` (OTPs
+    printed to stdout — broken login *and* credential disclosure) and
+    `StubPaymentProvider` (fake order ids against real bookings), warning only.
+    Confirmed by actually booting with `NODE_ENV=production` and watching it
+    serve `HTTP 200`. FCM and Gemini are deliberately *not* fatal: their
+    fallbacks degrade a feature rather than breaking money or credentials, so
+    they warn loudly instead of blocking a deploy. `TRUST_PROXY=false` in
+    production is now fatal too — every per-IP limit silently collapses onto the
+    load balancer's address without it (§49).
+
+### 2026-08-17 (Push delivery: failures made visible)
+
+-   **Root cause of the "FCM is configured but nothing is delivered" bug was a
+    misconfiguration, but the real defect was that it was invisible.**
+    `FCM_CLIENT_EMAIL` held a personal Google address rather than a service
+    account, so Google answered every token exchange with
+    `invalid_grant: account not found` and firebase-admin surfaced
+    `app/invalid-credential`. Push delivery was 0% functional and nothing —
+    no log line, no failed job, no metric — said so.
+-   **`processNotificationJob` discarded every delivery outcome except the two
+    "token is dead" codes.** `PushSendResult.success === false` was dropped on
+    the floor, so the job completed successfully having delivered nothing. It
+    now always logs a failure summary (notification id, type, user, failure
+    count, per-token error codes) and throws for retriable failures so BullMQ's
+    existing bounded backoff (`attempts: 5`) applies. Device tokens are logged
+    as a truncated prefix only — a token can be used to push to that device
+    (§61).
+-   **`PushSendResult` gained `retriable` and `errorCode`.** The original
+    interface comment assumed gateway-level failures would throw and only
+    per-token failures would resolve; that assumption was wrong, and was
+    precisely what let a broken credential masquerade as routine stale-token
+    noise. Classifying vendor error codes stays inside the provider, where the
+    vendor vocabulary belongs — the same reasoning that put
+    `verifyWebhookSignature` behind `PaymentProvider` (§37).
+    `messaging/invalid-argument` is deliberately in neither the invalid-token
+    nor the retriable set: FCM returns it both for a malformed token and for a
+    malformed payload, so treating it as a dead token would wipe every user's
+    devices on a payload bug, and retrying it would never succeed. It is logged
+    instead.
+-   **`createPushProvider()` now rejects a non-service-account
+    `FCM_CLIENT_EMAIL` at boot**, falling back to `ConsolePushProvider` with an
+    actionable message rather than constructing a provider that is guaranteed
+    to fail on every send. One `.endsWith('.iam.gserviceaccount.com')` check
+    would have turned this bug into a startup error.
+-   Verified end-to-end against the real FCM API in all three states: a valid
+    service account authenticates and reaches the gateway; a junk token logs
+    `messaging/invalid-argument` and is correctly neither removed nor retried;
+    a non-existent service account logs `app/invalid-credential` and is retried
+    by BullMQ. Notification rows persist in every case, so the in-app
+    notification centre is unaffected by delivery failure (§46).
+
+### 2026-08-17 (Verification follow-up: error mapping, Redis resilience, suspension)
+
+-   **`errorHandler` mapped every non-`AppError` to 500, which was one cause
+    behind four separate defects**: malformed JSON on any endpoint, a body over
+    the 1MB limit, an upload over the 5MB limit (`MulterError`), and a webhook
+    posted with a non-JSON content type all answered
+    `500 INTERNAL_ERROR`. Each of those is the caller's mistake and carries its
+    own correct status, which was being discarded — and every one of them
+    inflated the 5xx rate with client errors. They now map to `INVALID_JSON`
+    (400), `PAYLOAD_TOO_LARGE` (413), `FILE_TOO_LARGE` (413) and
+    `INVALID_WEBHOOK_PAYLOAD` (400). As a side effect `webhookService`'s own
+    `INVALID_WEBHOOK_PAYLOAD` branch stopped being unreachable dead code.
+-   **5xx `AppError`s are now logged with their `cause`.** 4xx stays quiet (it
+    is the caller's problem); a 5xx is ours, and previously a `502`
+    reached the client with the provider's actual failure discarded
+    server-side. This is what makes `AppError`'s `cause` worth attaching, and
+    `GeoapifyMapProvider`'s bare `catch {}` — which threw away the only
+    evidence of why a transient failure lost a ride creation — now attaches it.
+-   **The Redis client had no command timeout, so an outage hung requests
+    rather than failing them.** ioredis buffers commands while disconnected
+    (`enableOfflineQueue`), and only the rate limiter raced its own deadline.
+    Everything else inherited the hang: `/ready` blocked past 10s instead of
+    answering `503 REDIS_UNAVAILABLE` — the readiness probe failing in exactly
+    the scenario it exists for — and every OTP request held a connection open
+    for the duration. A `commandTimeout` on the shared client fixes it
+    centrally: `/ready` now answers 503 in ~2s, OTP fails closed with
+    `503 SERVICE_UNAVAILABLE`, and rate limiting still fails *open* as designed.
+    BullMQ is unaffected (separate connection, blocking commands are meant to
+    wait). Disabling the offline queue outright would have been the wrong fix —
+    it also breaks the normal reconnect window.
+-   **`users.status` was read nowhere in the codebase**, so `SUSPENDED` was
+    decorative: a suspended account could log in, refresh, and call every
+    endpoint. Enforced now at the two points a session is *granted* — OTP
+    verification and refresh-token rotation — rather than in `authenticate`.
+    That is deliberate and follows §8/§10: access tokens are stateless and
+    short-lived, and role changes already work this way, so suspension takes
+    effect within one 15-minute token lifetime without adding a database read
+    to every authenticated request. The refresh path checks inside the existing
+    rotation transaction (the user row is already joined there) and revokes the
+    whole token family atomically. Not enforced on request-otp, which would
+    confirm an address has an account and reintroduce the §9 enumeration leak.
+    No suspend/unsuspend endpoint was added — §6 keeps a blocked-user system
+    out of scope, so status is set directly, exactly like ADMIN provisioning.
+-   **Socket.IO CORS was configured from the raw `CORS_ORIGIN` string** while
+    Express used the parsed `corsOrigins` array. With more than one origin
+    configured it emitted the whole comma-separated list as a single
+    `Access-Control-Allow-Origin`, which is not a legal header value — so
+    WebSocket chat broke for *every* origin the moment a second one was added,
+    while the REST API kept working.
+-   **Rate limiting was opt-in per router**, leaving the entire admin module,
+    the notification endpoints and chat history with no limit at all, and any
+    new router unprotected by default. Added a deliberately generous shared
+    `authenticatedReadLimit` for authenticated endpoints that don't warrant
+    their own bucket.
+-   **Support tool results shipped raw service DTOs to the model**, meaning
+    every ride lookup pushed `routeGeometry` — the full route coordinate list —
+    into the LLM context, along with the driver's `postingCommissionAmount`.
+    Projections trim tool output to the fields a support answer is phrased
+    from: `getRideStatus` went from ~10,000 characters to 335 (§96.5 cost
+    control). The ownership-checked service calls are unchanged.
+-   **Shutdown never released anything.** No `prisma.$disconnect()`, no
+    `redis.quit()`, no queue `close()`, no timeout, and no
+    `unhandledRejection`/`uncaughtException` handlers anywhere — an unhandled
+    rejection in a worker killed the process with nothing but a stack trace.
+    All added, with a 10s force-exit so a stuck keep-alive can't hang the
+    process, plus an `EADDRINUSE` message instead of a raw unhandled 'error'.
+-   **Validation errors now name the failing field.** A ride creation missing
+    four coordinates previously answered "expected number, received undefined"
+    four times with no indication of which fields.
+-   **Deliberately not changed:** refreshing after logout still returns
+    `REFRESH_TOKEN_REUSE_DETECTED`. The wording is alarming for a normal
+    logout, but the server genuinely cannot distinguish a logged-out token from
+    a stolen one, and treating that presentation as suspicious is the correct
+    security posture. Softening the code would weaken a real control to improve
+    a message.
+
+### 2026-08-18 (BullMQ workers stalled permanently after a Redis outage)
+
+-   **Every Worker now gets its own Redis connection; only the Queues share
+    one.** All three Workers and all three Queues previously ran on a single
+    `queueConnection`. A Worker sits in a blocking `BZPOPMIN`/`BRPOPLPUSH`
+    waiting for its next job, and a blocking command monopolises the socket it
+    was issued on, so several Workers on one connection contend for it. That
+    works while the connection stays healthy — which is why it survived every
+    earlier phase — but once an outage drops the socket, at least one Worker's
+    blocking loop never resumes after the reconnect.
+-   **The failure was silent and permanent.** The stalled Worker reported
+    `isRunning() === true`, emitted no error, and its `failed` handler never
+    fired; jobs simply accumulated in `wait` with `active=0` until the process
+    was restarted. Consequences: seat-hold expiry never fires (so seats are
+    held forever against bookings that never paid — §35/§36), refunds are never
+    submitted (§11), and no notification is ever delivered.
+-   **Found during the second verification pass, and initially misattributed.**
+    It was first recorded as pre-existing on the grounds that
+    `queue/connection.ts` was untouched by the preceding bug-fix commits. That
+    reasoning was right about the file and wrong about the cause: the defect is
+    in how Workers were *given* that connection, which predates those commits
+    but was never exercised because no earlier phase had induced a Redis outage
+    while queues were idle.
+-   **Reproduced in isolation before changing anything**, outside the app: one
+    shared connection + three Workers + a 25s outage with the queues idle left
+    exactly one queue at `wait=1`/`active=0` permanently, while the other two
+    recovered. A single Worker on a shared connection recovered fine, and a 3s
+    bounce recovered fine — which is why the bug looked intermittent and
+    duration-dependent rather than structural.
+-   **Verified after the fix** against the same scenario at 25s and again at
+    45s: all three queues drained and the notification actually persisted,
+    **without restarting the process**. Normal (no-outage) throughput and
+    SIGTERM shutdown were re-checked and unchanged.
+-   `createQueueConnection(label)` also attaches an `error` listener to each
+    queue connection. Those were previously the clients ioredis complained
+    about with `missing 'error' handler on this Redis client` during an outage;
+    an ioredis 'error' with no listener is an unhandled 'error' event.
+    `closeQueueConnections()` closes the whole pool on shutdown, replacing the
+    single `queueConnection.quit()`, and falls back to `disconnect()` when
+    `quit()` can't complete because the server is already gone.
+-   **The Socket.IO adapter's two `redis.duplicate()` clients were the same
+    defect and are fixed alongside it.** They now have `error` listeners, and
+    `closeSocketRedisClients()` closes them during shutdown — the adapter did
+    not create those connections, so `io.close()` left them open. They are
+    closed *after* `io.close()`, since the adapter still publishes on them
+    while sockets are being torn down. `commandTimeout` inherited from the
+    parent client is deliberately left in place: SUBSCRIBE/PUBLISH are ordinary
+    request/response commands, and delivered pub/sub messages are pushes rather
+    than command replies, so the deadline never applies to waiting for a
+    message. Verified: `missing 'error' handler on this Redis client` no longer
+    appears during an outage, and a full chat round trip (join -> send ->
+    broadcast -> persisted) still works afterwards without a restart.
+
+### 2026-08-19 (Roadmap: Phase 15 closed, deployment retargeted to Render/Supabase/Upstash)
+
+-   **Phase 15 rewritten from "Testing + Hardening" to "Verification +
+    Hardening", and marked complete.** The phase originally specified unit,
+    integration, API, concurrency and failure *test suites*. The verification
+    those suites were meant to provide was performed — two full passes driving
+    the running application against the real stack, with every bug found fixed
+    and re-verified — but no test framework was introduced. §17 (Verification) now
+    records what was exercised: build health, functional flows, security and
+    IDOR boundaries, all six concurrency/idempotency scenarios, and the
+    failure paths.
+-   **The documentation must not claim an automated test suite exists**, because
+    none does. A new §0 states the current milestone and the testing position
+    up front, and §69 (Testing Strategy) is now labelled as the specification
+    for a suite that has not been built rather than a description of existing
+    code. Automated testing stays on the roadmap as future hardening, together
+    with structured logging and OpenAPI.
+-   **Deployment target split into current and future (§65).** The immediate
+    target is Render + Supabase + Upstash for a portfolio/demo deployment at
+    minimal cost; AWS ECS Fargate + RDS + ElastiCache + load balancer is
+    preserved as the future production target. The two are documented as
+    deliberately non-equivalent. Migration should be configuration,
+    containerization and splitting the workers out of the API process — not a
+    rewrite — because every external dependency already sits behind an
+    interface or a connection string.
+-   **Docker dropped from Phase 16 and moved to the future AWS scope.** The old
+    Phase 16 mandated a Dockerfile only because ECS Fargate can exclusively run
+    containers. Render builds and runs the Node service directly from the repo,
+    so an image would be an artifact to maintain with nothing to show for it.
+    §64 now marks the Compose file as development-only.
+-   **A blocking constraint was measured, not assumed, before writing the
+    Phase 16 plan.** An idle Rydex with zero traffic issues ~344 Redis
+    commands/minute (bzpopmin + zrangebyscore + evalsha from three polling
+    BullMQ workers), i.e. roughly 495,000 commands/day at rest. A
+    command-metered free tier such as Upstash's is exhausted by that alone, so
+    §19 (Roadmap) records the Redis provider as an explicit decision to be
+    settled before implementation, with the options and their consequences.
+    Related: Render's free tier sleeps when idle, and because the workers share
+    the API process, delayed jobs (seat-hold expiry) fire late on wake — they
+    are not lost, which was confirmed locally.
+-   **Stale business rule corrected in Phase 17, documentation only.** Its
+    driver journey still read "Upload documents (verification pending, does not
+    block)" with ride eligibility as "ownership + ACTIVE + seat capacity".
+    That was superseded by §97 (2026-08-11) and §8/§96, and the running code
+    rejects an unverified vehicle with `409 VEHICLE_NOT_ELIGIBLE` (confirmed at
+    runtime). §19 (Roadmap) now states the rule the code enforces. **No code was
+    changed** — the documentation was wrong, not the implementation.
+-   **Rating flagged in Phase 17 rather than silently verified.** The journey
+    ends in "Rating", but there is no Rating model or endpoint and
+    `users.rating_average` is never written. Phase 17 now says so and requires
+    it to be implemented or struck before that phase runs.
+
+### 2026-08-19 (BullMQ idle polling made configurable and reduced 13.8x)
+
+-   **`QUEUE_DRAIN_DELAY_SECONDS` (default 60) and
+    `QUEUE_STALLED_INTERVAL_SECONDS` (default 300) now tune worker polling**,
+    applied to all three Workers through a shared `workerPollingOptions` in
+    `infrastructure/queue/connection.ts`. BullMQ's defaults are `drainDelay: 5`
+    and `stalledInterval: 30000`; a Worker re-issues its blocking `BZPOPMIN`
+    every drain cycle, so those defaults cost Redis commands continuously even
+    with the application idle. On Redis priced per command (§19 (Roadmap)) that
+    is billable traffic for doing nothing.
+-   **Measured, not estimated.** Idle, zero traffic, excluding the local
+    docker-compose healthcheck: ~332 commands/minute (~478k/day) at the
+    defaults, ~24/minute (~34.6k/day) at 60s. The cost is deterministic — each
+    Worker issues exactly 8 commands per drain cycle — so
+    `3 * 8 * (86400 / drainDelay)` predicts it, and matches the measurement
+    exactly at 60s.
+-   **The earlier ~495k/day figure was slightly overstated** and is corrected
+    here: 12 commands/minute of it were docker-compose's `redis-cli ping`
+    healthcheck, proved by stopping the application and watching the pings
+    continue unchanged. That is local development infrastructure and will not
+    exist in a deployed environment.
+-   **Verified that raising these does not delay work.** `BZPOPMIN` wakes the
+    moment a job is pushed, so the drain delay never applies to an enqueued
+    job: an immediate job was processed in ~300ms, and delayed jobs still fired
+    within ~300ms of schedule (+5s -> 5304ms, +10s -> 10277ms). Seat-hold
+    expiry therefore keeps its precision (§35/§36). The genuine trade-off is
+    stalled-job recovery, which now takes up to `QUEUE_STALLED_INTERVAL_SECONDS`
+    after a worker dies mid-job rather than 30s — acceptable because every
+    Rydex job is short.
+
+### 2026-08-16 (Ratings built; reputation split by role)
+
+-   **Ratings moved from scaffolding to a working feature.**
+    `users.rating_average`/`rating_count` had existed since the first migration
+    and were read by the fare multiplier (§29) and the `DRIVER_RATING` sort
+    (§25), but no code ever wrote them — so the multiplier always resolved to
+    `1.0` and the sort always collapsed onto its `r.id` tie-breaker. Both
+    features were present and inert. New `Rating` entity, `src/modules/rating/`,
+    and `POST`/`GET /api/v1/bookings/:id/ratings`.
+-   **Reputation is now role-scoped, which forced a rename of the existing
+    columns.** `rating_average`/`rating_count` became `driver_rating_*`, and
+    `passenger_rating_*` was added alongside. A single blended average was
+    rejected: the fare multiplier and the search sort read the *driver* figure,
+    so folding in someone's conduct as a passenger would price rides on the
+    wrong signal. This is a schema change to `users`, not an additive one.
+-   **Eligibility gates on `ride.status = COMPLETED`, not `booking.status`.**
+    A booking only reaches `COMPLETED` via its final-payment webhook, and no
+    reconciliation job exists to recover a payment whose webhook never arrived
+    (a gap this log already records) — gating on the booking would let a payment
+    failure make a trip permanently unrateable for a passenger who did nothing
+    wrong. The looser gate accepts that someone who never paid their remainder
+    can still rate; that was judged the better failure.
+-   **The aggregate is maintained by one atomic `UPDATE`, never
+    read-modify-write.** The denormalised average has to stay a column because
+    the fare path reads it synchronously during ride creation, so recomputing an
+    `AVG()` there would put an aggregate query on a hot path. Computing the new
+    average *inside* the statement puts the read under the lock the `UPDATE`
+    already takes — the same shape as `reserveSeats` (§36). Verified with 8
+    simultaneous ratings against one driver: the stored average matched a
+    freshly recomputed `AVG()` exactly (4.25 over 8), with no lost updates. The
+    naive version would have dropped several.
+-   **A repeat rating is rejected, not replayed.** `UNIQUE (booking_id,
+    rater_id)` in the same transaction as the aggregate, surfacing as
+    `409 ALREADY_RATED`. This deliberately differs from the payment endpoints'
+    idempotency-key behaviour: a key exists so a retried *side effect* happens
+    once, but a rating is a one-time opinion, and replaying the original would
+    hide that a second, different score was discarded. Ratings are immutable.
+-   **The direction is derived, never declared.** One endpoint serves both
+    passenger→driver and driver→passenger; the ratee and role come from the
+    booking plus `req.user.id`, and the request body has no identity field to
+    spoof — same reasoning that keeps `userId` out of the AI tool schemas
+    (§96.5). Confirmed at runtime that a request smuggling `rateeId`/`raterId`
+    has no effect.
+-   **The `rides` GiST-index hazard recurred for the third time**, on a
+    migration that does not touch `rides` at all — confirming it fires on *any*
+    migration, not just `rides`-adjacent ones. `prisma migrate diff` also
+    proposed `DROP COLUMN`/`ADD COLUMN` for the two renamed columns, since
+    Prisma cannot infer a rename; left as generated it would have discarded the
+    data (harmless today, all NULL/0 — but by luck, not design). Both corrected
+    by hand before applying, with the reasoning recorded in the migration file,
+    and the file now re-asserts the two spatial indexes with
+    `CREATE INDEX IF NOT EXISTS` as a backstop.
+
+---
+
+# 20. Roadmap
+
+## Phase 16 — Deployment (next)
+
+The immediate target is a portfolio deployment on free tiers: Render for the Node
+service, Supabase for PostgreSQL + PostGIS, Upstash for Redis. It is explicitly
+not a production stack, and the two are documented as non-equivalent.
+
+Two constraints were measured before the plan was written rather than assumed.
+Render's free tier sleeps when idle, and because the workers share the API
+process, delayed jobs fire late on wake — they are not lost, which was confirmed
+locally. Upstash meters per command, and an idle Rydex spends real commands on
+BullMQ polling; tuning the drain and stalled intervals cut that from roughly
+478,000 to 34,600 commands per day without delaying any job.
+
+No Dockerfile is required for this target. Render builds the Node service
+directly from the repository, so an image would be an artifact to maintain with
+nothing to show for it. Containerisation belongs to the AWS target.
+
+The full plan, including the free-tier decisions that have to be settled first,
+follows.
+
+
+### Goal
 
 Prepare and deploy the current Rydex backend on a free/low-cost cloud stack
 suitable for portfolio/demo use, while keeping the application architecture
@@ -2768,14 +2581,14 @@ portable to a future AWS production deployment.
 
 ``` text
 NOW      Render + Supabase + Upstash      (portfolio / demo)
-FUTURE   AWS ECS Fargate + RDS + ElastiCache   (production, claude.md §65)
+FUTURE   AWS ECS Fargate + RDS + ElastiCache   (production, spec §65)
 ```
 
 The application itself should need no architectural change to move between
 them: every external dependency already sits behind an interface or a
 connection string.
 
-## Current deployment architecture
+### Current deployment architecture
 
 ``` text
                     Internet
@@ -2804,7 +2617,7 @@ Note the backend is a **single process** that serves HTTP, Socket.IO *and*
 runs all three BullMQ workers as import side effects (`src/server.ts`).
 Nothing separates them, which is what makes several items below matter.
 
-## Redis command volume --- measured, and reduced
+### Redis command volume --- measured, and reduced
 
 BullMQ workers poll continuously, which costs Redis commands even with nobody
 using the app. That matters on hosted Redis that meters per command
@@ -2839,7 +2652,7 @@ Both knobs are configuration, not code: `QUEUE_DRAIN_DELAY_SECONDS` and
 `QUEUE_STALLED_INTERVAL_SECONDS`. Choosing a value for the target plan is a
 deployment decision, not a rewrite.
 
-### What raising them does and does not cost
+#### What raising them does and does not cost
 
 Verified at runtime with `drainDelay = 60`:
 
@@ -2857,7 +2670,7 @@ BullMQ's default 30s. Rydex's jobs are short (release a seat, submit a refund,
 send a notification), so a longer window costs latency after a crash, not
 correctness.
 
-### Redis provider decision
+#### Redis provider decision
 
 Still to confirm at signup, now against a much smaller number:
 
@@ -2872,7 +2685,7 @@ B  Use a Redis whose free tier is sized by memory/connections rather than
 Dropping BullMQ is not an option: seat-hold expiry is what releases seats
 held by unpaid bookings (§35/§36).
 
-## Render backend
+### Render backend
 
 Determined from the actual `package.json` and `src/server.ts`:
 
@@ -2901,7 +2714,7 @@ all provider keys      Brevo and Razorpay are mandatory in production;
                        with a warning instead
 ```
 
-### Render free-tier limitations to document and accept
+#### Render free-tier limitations to document and accept
 
 ``` text
 sleeps after inactivity
@@ -2925,7 +2738,7 @@ no persistent disk
     Already fine: uploads go to Cloudinary, nothing is written locally.
 ```
 
-## Supabase PostgreSQL + PostGIS
+### Supabase PostgreSQL + PostGIS
 
 ``` text
 PostGIS            required. The init migration already runs
@@ -2957,7 +2770,7 @@ connection limits  Free tier caps connections; the pool size must be set
                    accordingly rather than left at the default.
 ```
 
-## Upstash Redis
+### Upstash Redis
 
 Subject to the blocking decision above. If Upstash is retained:
 
@@ -2973,7 +2786,7 @@ BullMQ         requires blocking commands (BZPOPMIN/BRPOPLPUSH) and Lua
                maxRetriesPerRequest: null is already set on queue
                connections, as BullMQ requires
 connections    each Worker holds its own connection (a Worker's blocking
-               command monopolises its socket --- see claude.md §97,
+               command monopolises its socket --- see the decision log (§18),
                2026-08-18). Current usage: 1 shared queue connection
                + 3 worker connections + 1 general client + 2 Socket.IO
                adapter clients = 7 concurrent connections minimum.
@@ -2982,7 +2795,7 @@ OTP + limits   the general client carries commandTimeout, so a Redis stall
                fails fast rather than hanging (§97, 2026-08-17)
 ```
 
-## External providers
+### External providers
 
 All are already behind interfaces or config; deployment work is supplying
 credentials, not code:
@@ -3003,7 +2816,7 @@ Geoapify     MAP_PROVIDER_API_KEY. Free tier is credit-limited per day.
 Gemini       GEMINI_API_KEY. Degrades to a console provider if absent.
 ```
 
-## Docker
+### Docker
 
 **Not required for this phase.** The original Phase 16 mandated a Dockerfile
 because it targeted ECS Fargate, which can only run containers. Render
@@ -3011,11 +2824,11 @@ builds and runs a Node service directly from the repository using the build
 and start commands above, so a Dockerfile would add an image to maintain
 without changing what runs.
 
-Containerization moves to the future AWS production scope (claude.md §65),
+Containerization moves to the future AWS production scope (spec §65),
 where it is genuinely required. If Render is ever configured to deploy from a Dockerfile
 instead of its native Node runtime, this decision should be revisited.
 
-## Success criteria
+### Success criteria
 
 ``` text
 [ ] backend deployed and reachable over HTTPS on Render
@@ -3034,16 +2847,20 @@ instead of its native Node runtime, this decision should be revisited.
 [ ] core API smoke verification passes
 ```
 
-## Status: not started
+### Status: not started
 
 Phase 16 is the next milestone. The blocking decision above must be resolved
 first.
 
 ------------------------------------------------------------------------
 
-# 21. Phase 17 --- Final Deployed Integration
+## Phase 17 — End-to-end verification of the deployment
 
-## Goal
+Blocked on Phase 16. Verifies the complete passenger and driver journeys against
+real deployed infrastructure rather than a local stack.
+
+
+### Goal
 
 Verify the **complete Rydex product end-to-end against the deployed
 Render + Supabase + Upstash environment**.
@@ -3061,12 +2878,12 @@ correct --- managed Postgres, hosted Redis, a TLS-terminating proxy, real
 provider webhooks reaching a public URL, and free-tier behavior are all
 things that cannot be exercised locally.
 
-## Business journey
+### Business journey
 
 Business rules below are the ones the code actually implements; they are
 restated here, not changed.
 
-### Driver
+#### Driver
 
 ``` text
 Register
@@ -3092,11 +2909,11 @@ Ride becomes OPEN
 Note the eligibility line: vehicle verification **does gate** ride creation.
 An earlier draft of this phase said documents were "verification pending,
 does not block" and listed eligibility without the VERIFIED requirement.
-That was superseded by claude.md §97 (2026-08-11) and §8/§96, and the
+That was superseded by the decision log (§18) (2026-08-11) and §8/§96, and the
 running code enforces it --- an unverified vehicle is rejected with
 `409 VEHICLE_NOT_ELIGIBLE`. The text above matches the implementation.
 
-### Passenger
+#### Passenger
 
 ``` text
 Register
@@ -3118,7 +2935,7 @@ Pay 10% prepayment
 Booking confirmed
 ```
 
-### Ride
+#### Ride
 
 ``` text
 Driver starts ride
@@ -3134,13 +2951,14 @@ Passenger pays remaining 90%
 97% driver settlement
 ```
 
-Ratings are **future scope** (§22a) and are deliberately not part of this
-journey. `users.rating_average` / `rating_count` exist on the schema and are
-read by the fare strategy and returned in search results, but nothing writes
-them, so a driver's rating multiplier always uses its neutral default. That
-is the intended behavior for this milestone.
+Ratings close the journey (§18): once the ride is `COMPLETED`, the passenger
+rates the driver and the driver rates the passenger, each once per booking. The
+deployed verification should confirm the two aggregates move independently —
+a driver's `driver_rating_average` must not be affected by how they were rated
+as a passenger — and that a rated driver's next ride prices inside the ±5% band
+the fare multiplier allows.
 
-### Cancellation
+#### Cancellation
 
 ``` text
 passenger cancellation      10% prepayment retained; rejected once the
@@ -3156,9 +2974,9 @@ payment state               refund intents recorded, resolved by the
                             refund worker
 ```
 
-## Deployed infrastructure verification
+### Deployed infrastructure verification
 
-### Render
+#### Render
 
 ``` text
 [ ] API reachable over HTTPS
@@ -3173,7 +2991,7 @@ payment state               refund intents recorded, resolved by the
 [ ] cold-start behavior after sleep is understood and tolerable
 ```
 
-### Supabase
+#### Supabase
 
 ``` text
 [ ] Prisma connects over TLS
@@ -3187,7 +3005,7 @@ payment state               refund intents recorded, resolved by the
 [ ] connection pool sized within the free-tier cap
 ```
 
-### Redis (Upstash, or the alternative chosen in §20 above)
+#### Redis (Upstash, or the alternative chosen in §20 above)
 
 ``` text
 [ ] connectivity over TLS
@@ -3201,7 +3019,7 @@ payment state               refund intents recorded, resolved by the
 [ ] command volume within plan limits (see the §20 blocking decision)
 ```
 
-### External integrations
+#### External integrations
 
 ``` text
 [ ] email      real OTP delivered to a real inbox
@@ -3215,7 +3033,7 @@ payment state               refund intents recorded, resolved by the
                still enforced
 ```
 
-## Final deployed end-to-end flow
+### Final deployed end-to-end flow
 
 ``` text
                  RENDER
@@ -3250,7 +3068,7 @@ Passenger <-> Driver chat   (Socket.IO through the Render proxy)
 User -> AI support          (tool calling, ownership boundary)
 ```
 
-## Success criteria
+### Success criteria
 
 ``` text
 [ ] deployed backend reachable
@@ -3274,72 +3092,30 @@ User -> AI support          (tool calling, ownership boundary)
 [ ] no critical regression versus local Phase 15 verification
 ```
 
-## Status: not started
+### Status: not started
 
 Blocked on Phase 16. Phase 17 cannot begin until there is a deployment to
 verify.
 
 ------------------------------------------------------------------------
 
-# 22. Phase Completion Checklist
+---
 
-Claude must maintain this checklist.
+# 21. Known gaps and deliberate exclusions
 
-``` text
-[x] Phase 0 — Repository Initialization
-[x] Phase 1 — Backend Foundation
-[x] Phase 2 — Database Foundation
-[x] Phase 3 — Authentication
-[x] Phase 4 — User
-[x] Phase 4.5 — Driver Upgrade (License Verification)
-[x] Phase 5 — Vehicle + Documents
-[x] Phase 5.5 — Admin Verification Dashboard
-[x] Phase 6 — Map + Fare
-[x] Phase 7 — Ride Creation
-[x] Phase 8 — Ride Search
-[x] Phase 9 — Booking
-[x] Phase 10 — Payment
-[x] Phase 11 — Cancellation + Settlement
-[x] Phase 12 — Notifications
-[x] Phase 13 — Chat
-[x] Phase 13.5 — AI Support Chatbot
-[x] Phase 14 — Security
-[x] Phase 15 — Verification + Hardening
-[ ] Phase 16 — Render + Supabase + Upstash Deployment   <-- NEXT
-[ ] Phase 17 — Final Deployed Integration
-```
+Everything below is **out of scope** — excluded by decision, not left undone.
+Listed with the reasoning so the absence reads as a choice rather than an
+oversight.
 
-Update this checklist only after the phase actually passes its
-verification criteria.
-
-------------------------------------------------------------------------
-
-# 22a. Future Scope
-
-Work that is deliberately **not** part of the current milestone. Listed here
-so it is tracked rather than forgotten, and so nobody mistakes its absence for
-an oversight.
-
-## Ratings
+The only forward-looking work is Phase 16 (deployment) and Phase 17 (verifying
+it), both in §20. There is no third category: nothing here is "planned but not
+yet started".
 
 ``` text
-status   future scope --- not implemented, not scheduled
+automated tests · structured logging · metrics and tracing · OpenAPI
+DigiLocker verification · SOS · live tracking
+wallet · coupons · support tickets · blocked users · audit log · monthly passes
 ```
-
-There is no `Rating` entity, no rating endpoint, and no write path.
-`users.rating_average` / `rating_count` exist on the schema and are consumed
-by the fare strategy (§29's bounded rating multiplier) and returned in ride
-search results, but nothing ever writes them. The practical effect today:
-
-``` text
-every driver's rating multiplier resolves to its neutral default
-unrated drivers sort last in DRIVER_RATING order (COALESCE(rating_average, 6))
-```
-
-Both behaviors are correct for an unrated population. Implementing ratings
-later is additive --- a table, a write path after ride completion, and an
-aggregate update --- and needs no change to fare, search or settlement, which
-already read the columns.
 
 ## Automated test infrastructure
 
@@ -3356,259 +3132,127 @@ Both were noted as outstanding in earlier phases and remain so.
 ## AWS production infrastructure
 
 ECS Fargate, RDS PostgreSQL + PostGIS, ElastiCache Redis and a load balancer
-are the future production target (claude.md §65). The current milestone
-deploys to Render + Supabase + Upstash instead. Containerization belongs to
-that future scope, which is why Phase 16 requires no Dockerfile.
+would be the production target if one were ever pursued. The current milestone
+deploys to Render + Supabase + Upstash instead, and containerization belongs
+with AWS — which is why Phase 16 needs no Dockerfile.
+
+## DigiLocker document verification
+
+```
+status   out of scope --- not implemented, not planned
+```
+
+Today an admin opens a signed Cloudinary URL and looks at a JPEG. That works,
+but it authenticates nothing — a convincing forgery passes — and it does not
+scale past a reviewer's attention span.
+
+DigiLocker is India's issuer-backed document wallet: a driving licence or RC
+pulled through it comes from the issuing authority, so authenticity is a matter
+of provenance rather than inspection.
+
+The useful property is how little would change. It fits the existing provider
+pattern as a new capability interface alongside `MapProvider` / `PaymentProvider`
+— the domain would depend on the interface, not on DigiLocker's API. Both
+verification state machines stay exactly as they are, and so do the decision
+fields (`verifiedBy`, `verifiedAt`, `rejectionReason`) — they would simply
+record an automated verifier instead of an admin user id. Manual review remains
+the fallback for anything DigiLocker cannot supply, so the admin module is
+augmented rather than replaced.
+
+Open questions: DigiLocker requires organisational onboarding and OAuth-style
+user consent, which is a product/legal step before it is an engineering one; and
+consent tokens are user-scoped and expiring, so the flow is
+"user authorises → we fetch → we verify", not a background job.
+
+## SOS and live ride tracking
+
+```
+status   out of scope --- not implemented, not planned
+```
+
+Nothing currently knows where a ride is once it starts. `STARTED` and
+`COMPLETED` are the only signals, both driver-triggered.
+
+This is the largest item on this list, and the only one that does not fit the
+current architecture as-is. Everything built so far is **read-heavy and
+index-optimised** — ride search is one bounded PostGIS query per request. A
+location stream is the opposite workload: small, constant, high-frequency writes
+per active ride, with almost no read traffic until someone opens a map or an
+incident occurs.
+
+Consequences worth thinking through before building it:
+
+- **Storage is the open decision.** Routing position updates through the same
+  PostgreSQL primary that serves seat reservations and payment transitions would
+  make a background stream contend with the operations that must stay fast. A
+  partitioned table with a short retention window, a separate store, or a
+  time-series database are all plausible; PostGIS's `geography` type is already
+  the right shape for the data.
+- **Ingestion already exists.** Socket.IO plus the Redis adapter is the transport
+  the app already runs, so this does not need new infrastructure to receive
+  positions — only to persist them.
+- **SOS is a smaller problem than tracking.** It needs emergency contacts on the
+  user, a trigger endpoint, and a delivery path — and the notification pipeline
+  (BullMQ → FCM, with persistence separate from delivery) already provides the
+  last of those. The one deliberate exception it would need is bypassing the
+  normal rate limits, since an SOS is exactly the request that must never be
+  throttled.
+- **Retention is a privacy decision, not a technical one.** Continuous location
+  history for every ride is sensitive data; how long it is kept, and who can read
+  it, should be settled before the first row is written rather than after.
 
 ------------------------------------------------------------------------
 
-# 23. Definition of Done for Every Phase
+## If the exclusions were ever revisited
 
-A phase is complete only when:
+Not a roadmap — none of this is scheduled. Recorded only so that a future
+decision to take any of it on starts from the right ordering rather than from
+scratch. Ordered by value per unit of effort:
 
-``` text
-[ ] implementation complete
-[ ] migrations complete
-[ ] validation implemented
-[ ] authorization implemented
-[ ] error handling implemented
-[ ] tests added
-[ ] typecheck passes
-[ ] lint passes
-[ ] build passes
-[ ] relevant integration tests pass
-[ ] documentation updated
-[ ] no known architectural violations
+1. **CI** — typecheck, lint and build on every push. The cheapest guard
+   available, and nothing exists today.
+2. **A CI check asserting both spatial indexes exist.** The Prisma migration
+   hazard has now recurred three times and is mitigated only by a process rule,
+   which is exactly the kind of thing a machine should enforce instead.
+3. **Automated tests, in dependency order.** Unit tests for the pure functions
+   first (fare, commission, cancellation policy, settlement, cursor
+   encode/decode) — highest value per effort. Then integration tests for the
+   concurrency scenarios against a real PostgreSQL: seat allocation, webhook
+   idempotency, refresh-token reuse and the rating aggregate are the behaviours
+   most expensive to re-verify by hand and most costly to regress. Then API
+   tests.
+4. **Structured logging** (pino with a request-scoped child logger — every call
+   site already carries the correlation id), then **metrics and alerting**.
+5. **OpenAPI generation** from the existing Zod schemas, which are already the
+   source of truth for request shapes.
+6. **Splitting the workers out of the API process** — the single most valuable
+   structural change, and the only migration item that needs code.
+7. **Payment reconciliation**, closing the "webhook never arrived" gap — which
+   is also what would let rating eligibility tighten from the ride to the
+   booking.
+
+---
+
+# 22. Migration procedure
+
+One process rule that has to survive, because breaking it silently degrades ride
+search to a sequential scan.
+
+`rides.origin` and `rides.destination` are `Unsupported("geography(Point,4326)")`,
+so Prisma's diff engine has no record that their GiST indexes exist and will emit
+`DROP INDEX` for both on any migration touching `rides` — even one unrelated to
+geography. This has happened twice, and once left both indexes actually missing.
+
+For as long as those columns are `Unsupported`:
+
+```bash
+npx prisma migrate dev --create-only     # always --create-only
+# read the generated SQL
+# delete any DROP INDEX for rides_origin_gist / rides_destination_gist
+npx prisma migrate dev                   # then apply
 ```
 
-------------------------------------------------------------------------
-
-# 24. Claude Code Operating Instructions
-
-When starting a session:
-
-``` text
-1. Read RYDEX_ARCHITECTURE.md
-2. Read RYDEX_PHASES.md
-3. Inspect repository
-4. Find first incomplete phase
-5. Implement only that phase
-6. Run verification
-7. Fix failures
-8. Mark phase complete
-9. Continue to next phase only when current phase is stable
-```
-
-Claude may implement several phases in one session if the user
-explicitly asks for it, but it must still preserve the phase boundaries
-and verify each phase individually.
-
-------------------------------------------------------------------------
-
-# 25. Do Not Ask for Unnecessary Confirmation
-
-If the architecture and requirements already answer a question, proceed.
-
-Do not repeatedly ask:
-
-``` text
-Should I create the service?
-Should I create the database?
-Should I implement authentication?
-```
-
-Instead, follow the phase plan.
-
-Ask the user only when:
-
--   two requirements conflict
--   an important business rule is genuinely undefined
--   a destructive operation is required
--   an external credential is required
--   a decision materially changes the architecture
-
-------------------------------------------------------------------------
-
-# 26. Do Not Invent Business Requirements
-
-If a behavior is not defined:
-
-``` text
-do not silently invent a business rule
-```
-
-For implementation details, use engineering best practices.
-
-For business policy, flag the ambiguity.
-
-Examples of business policy:
-
-``` text
-refund percentage
-fare formula
-cancellation rules
-booking timeout
-seat limits
-verification requirements
-```
-
-------------------------------------------------------------------------
-
-# 27. Maintain an Architecture Decision Record
-
-When a meaningful architectural decision changes, create/update:
-
-``` text
-docs/architecture-decisions/
-```
-
-Example:
-
-``` text
-ADR-001-modular-monolith.md
-ADR-002-postgis.md
-ADR-003-refresh-token-rotation.md
-```
-
-Do not create an ADR for trivial code changes.
-
-------------------------------------------------------------------------
-
-# 28. Database Migration Rules
-
-Never modify production schema manually without a migration.
-
-Every schema change:
-
-``` text
-Prisma schema
-      ↓
-migration
-      ↓
-test
-```
-
-Migrations must be reviewed for:
-
--   destructive changes
--   locking implications
--   indexes
--   foreign keys
--   nullability
--   data migration requirements
-
-Never casually delete production columns/tables.
-
-## Standing rule: `rides` GiST indexes (added 2026-08-14, Phase 12)
-
-`rides.origin`/`destination` are `Unsupported("geography(Point,4326)")` in
-`schema.prisma` (claude.md §16/§77 — Prisma has no native geography type).
-Their hand-written GiST indexes (`rides_origin_gist`,
-`rides_destination_gist`, added by hand in migration
-`20260812123854_ride_creation`) are therefore invisible to Prisma's
-schema-diff engine. **Every** `prisma migrate dev`/`migrate diff` run,
-regardless of what the actual schema change is about, will propose
-`DROP INDEX "rides_origin_gist"`/`"rides_destination_gist"` as part of
-reconciling that "unknown" state — this has now happened twice
-(migrations `20260812171513_settlement_and_refunds` and
-`20260812182449_notifications`), for schema changes with nothing to do
-with `rides`.
-
-Until `origin`/`destination` stop being `Unsupported` (i.e. Prisma gains
-native geography support, or this project moves spatial indexing to
-raw-SQL-managed migrations entirely), every future migration must be
-generated with `prisma migrate dev --create-only`, hand-inspected for
-those two `DROP INDEX` statements, and have them stripped before
-applying. Do not run a plain `prisma migrate dev` on this project without
-this check — it will silently regress ride search's spatial index usage
-(claude.md §16/§20), which has no test coverage that would otherwise catch
-it (no automated test infra yet, per the Phase 3 note).
-
-------------------------------------------------------------------------
-
-# 29. Git Strategy
-
-Use small logical commits.
-
-Examples:
-
-``` text
-feat(auth): implement OTP verification
-feat(ride): add PostGIS ride search
-feat(booking): add transactional seat reservation
-feat(payment): add idempotent payment creation
-fix(booking): prevent duplicate seat allocation
-test(ride): add spatial search tests
-```
-
-Do not create one enormous commit containing the entire application.
-
-------------------------------------------------------------------------
-
-# 30. Final Instruction
-
-The project must evolve like this:
-
-``` text
-EMPTY FOLDER
-     |
-     v
-FOUNDATION
-     |
-     v
-DATABASE
-     |
-     v
-AUTH
-     |
-     v
-USER
-     |
-     v
-VEHICLE
-     |
-     v
-MAP + FARE
-     |
-     v
-RIDE
-     |
-     v
-SEARCH
-     |
-     v
-BOOKING
-     |
-     v
-PAYMENT
-     |
-     v
-CANCELLATION + SETTLEMENT
-     |
-     v
-NOTIFICATION
-     |
-     v
-CHAT
-     |
-     v
-SECURITY
-     |
-     v
-TESTING
-     |
-     v
-DEPLOYMENT
-     |
-     v
-PRODUCTION-READY RYDEX
-```
-
-The implementation should remain **production-oriented without becoming
-prematurely distributed**.
-
-The architecture document defines **what the system is**.
-
-This document defines **how Claude Code should build it**.
-
-Both files must be treated as living project documentation.
+Use `CREATE INDEX IF NOT EXISTS` when re-adding them, so a fresh-database replay
+does not collide with the original migration, and re-confirm with
+`EXPLAIN ANALYZE`. Never edit an applied migration in place without also
+correcting its stored checksum.

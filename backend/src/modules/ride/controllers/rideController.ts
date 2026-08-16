@@ -11,6 +11,13 @@ export const create: RequestHandler<unknown, unknown, CreateRideInput> = async (
   sendSuccess(res, result, 201);
 };
 
+// Dry run — computes route, fare and posting commission without creating
+// anything, so the driver sees what publishing costs before committing.
+export const preview: RequestHandler<unknown, unknown, CreateRideInput> = async (req, res) => {
+  const result = await rideService.previewRide(req.user!.id, req.body);
+  sendSuccess(res, result);
+};
+
 // Query is validated/coerced by validateQuery(searchRidesQuerySchema) into
 // req.validatedQuery — see app/middleware/validate.ts for why (Express 5's
 // req.query has no setter).

@@ -89,6 +89,12 @@ const envSchema = z.object({
   // Razorpay order per request, both metered/billed externally.
   RIDE_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   RIDE_CREATE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  // Preview gets its own, more generous budget: a driver may reasonably try
+  // several routes or seat counts before publishing, and sharing the create
+  // budget would mean previewing could lock them out of actually posting.
+  // Still limited because each preview costs a real map-provider call.
+  RIDE_PREVIEW_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(40),
+  RIDE_PREVIEW_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // Seat-hold spam: each booking reserves a real seat for
   // BOOKING_PAYMENT_TTL_SECONDS whether or not payment ever follows.

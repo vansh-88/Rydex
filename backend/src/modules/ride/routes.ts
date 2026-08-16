@@ -42,6 +42,13 @@ const createRideLimit = rateLimit({
   keyFn: (req) => req.user!.id,
 });
 
+const previewRideLimit = rateLimit({
+  keyPrefix: 'ride-preview-user',
+  windowSeconds: env.RIDE_PREVIEW_RATE_LIMIT_WINDOW_SECONDS,
+  max: env.RIDE_PREVIEW_RATE_LIMIT_MAX,
+  keyFn: (req) => req.user!.id,
+});
+
 const createBookingLimit = rateLimit({
   keyPrefix: 'booking-create-user',
   windowSeconds: env.BOOKING_CREATE_RATE_LIMIT_WINDOW_SECONDS,
@@ -65,6 +72,16 @@ rideRouter.post(
   validateBody(createRideSchema),
   idempotency('POST /rides'),
   rideController.create,
+);
+
+// Same validation and eligibility rules as POST / above, but with no side
+// effects and therefore no Idempotency-Key: there is nothing to replay.
+rideRouter.post(
+  '/preview',
+  authorize('DRIVER'),
+  previewRideLimit,
+  validateBody(createRideSchema),
+  rideController.preview,
 );
 
 // Must be registered before GET /:id — otherwise Express would match

@@ -73,6 +73,69 @@ function toRideDto(ride: RideRecord): RideDto {
   };
 }
 
+export interface RidePreviewDto {
+  distanceMeters: number;
+  durationSeconds: number;
+  routeGeometry: unknown;
+  farePerSeat: number;
+  totalSeats: number;
+  postingCommissionAmount: number;
+  currency: string;
+}
+
+// A dry run of createRide: same vehicle eligibility check, same route lookup,
+// same fare and commission maths — but nothing is written and no payment
+// order is created.
+//
+// This exists because publishing costs the driver money, and a driver who
+// only discovers the posting fee at a checkout screen will abandon. Showing
+// the real numbers first requires computing them first, and the create
+// endpoint cannot do that without also creating the ride.
+//
+// The figures are reproducible rather than estimated: fare depends only on
+// route distance, vehicle type and driver rating (the traffic multiplier is
+// not currently supplied and defaults to 1), so the same inputs yield the
+// same fare when the ride is actually created.
+export async function previewRide(
+  driverId: string,
+  input: CreateRideInput,
+): Promise<RidePreviewDto> {
+  const vehicle = await assertVehicleEligibleForRide(
+    driverId,
+    input.vehicleId,
+    input.availableSeats,
+  );
+
+  const driver = await userRepository.findById(driverId);
+  if (!driver) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'Driver not found');
+  }
+
+  const route = await mapProvider.getRoute(input.origin, input.destination, input.waypoints);
+
+  const fare = calculateFare({
+    distanceMeters: route.distanceMeters,
+    vehicleType: vehicle.vehicleType,
+    driverRatingAverage:
+      driver.driverRatingAverage === null ? null : driver.driverRatingAverage.toNumber(),
+  });
+
+  const postingCommissionAmount = calculatePostingCommission(
+    fare.farePerSeat,
+    input.availableSeats,
+  );
+
+  return {
+    distanceMeters: route.distanceMeters,
+    durationSeconds: route.durationSeconds,
+    routeGeometry: JSON.parse(route.geometry) as unknown,
+    farePerSeat: fare.farePerSeat,
+    totalSeats: input.availableSeats,
+    postingCommissionAmount,
+    currency: fare.currency,
+  };
+}
+
 // claude.md §18 creation flow. Every external call (MapProvider,
 // PaymentProvider) happens before the single DB write — claude.md §5.5:
 // "external calls are not part of DB transactions."

@@ -7,8 +7,8 @@ Canonical technical architecture for the Rydex backend, describing the system
 |---|---|
 | [`README.md`](../README.md) | Project overview |
 | **`docs/architecture.md`** | How the backend works, and why (this file) |
-| [`steps.md`](../steps.md) | How it was built — development progression, decision log, roadmap |
-| [`claude.md`](../claude.md) | Engineering context: conventions, invariants, and traps |
+| [`steps.md`](./steps.md) | How it was built — development progression, decision log, roadmap |
+| [`claude.md`](./claude.md) | Engineering context: conventions, invariants, and traps |
 
 **Honesty note.** Rydex has **no automated test suite**, **no structured
 logger**, **no metrics or tracing**, and **is not currently deployed**. Those are
@@ -1392,11 +1392,13 @@ why BullMQ entered the codebase three phases earlier than planned.
 
 **Idle polling cost is tuned.** Workers poll continuously, which matters on
 command-metered Redis. At BullMQ defaults that is ~332 commands/min (~478 k/day)
-with zero traffic; at `QUEUE_DRAIN_DELAY_SECONDS=60` /
-`QUEUE_STALLED_INTERVAL_SECONDS=300` it is ~24/min (~34.6 k/day) — a 13.8×
-reduction, measured rather than estimated. Raising the drain delay does **not**
-delay work: `BZPOPMIN` wakes the moment a job is pushed (verified: immediate jobs
-~300 ms, delayed jobs within ~300 ms of schedule). The real trade-off is
+with zero traffic; at the current `QUEUE_DRAIN_DELAY_SECONDS=300` /
+`QUEUE_STALLED_INTERVAL_SECONDS=300` it is ~7 commands/min (~10.3 k/day) — a 46×
+reduction, measured rather than estimated. (An intermediate 60 s setting measured
+~34.6 k/day.) Raising the drain delay does **not**
+delay work: `BZPOPMIN` wakes the moment a job is pushed — verified at 300 s, with
+delayed jobs firing +341 ms / +108 ms / +187 ms against 5 s / 15 s / 30 s
+schedules, so seat-hold expiry keeps its precision. The real trade-off is
 stalled-job recovery, now up to 300 s instead of 30 s — acceptable because every
 Rydex job is short.
 
@@ -1984,5 +1986,5 @@ at a point in time; it does not protect against regression.
 
 ---
 
-*Reflects the codebase at the close of Phase 15. See [`steps.md`](../steps.md) for
+*Reflects the codebase at the close of Phase 15. See [`steps.md`](./steps.md) for
 how it was built and the full decision log.*

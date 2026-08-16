@@ -177,7 +177,12 @@ const envSchema = z.object({
   // job is pushed, so enqueue-to-processing latency is unchanged. The real
   // trade-off is stalled-job recovery — if a worker dies mid-job, its job is
   // reclaimed after up to QUEUE_STALLED_INTERVAL_SECONDS instead of 30s.
-  QUEUE_DRAIN_DELAY_SECONDS: z.coerce.number().int().positive().default(60),
+  //
+  // 300s (not 60s) so the idle cost fits a command-metered free tier with
+  // room to spare: ~10,300 commands/day measured, rather than ~34,600 at 60s.
+  // Verified at this value that delayed jobs still fire within ~350ms of
+  // schedule, so seat-hold expiry (§35/§36) keeps its precision.
+  QUEUE_DRAIN_DELAY_SECONDS: z.coerce.number().int().positive().default(300),
   QUEUE_STALLED_INTERVAL_SECONDS: z.coerce.number().int().positive().default(300),
 
   // Consumed starting Phase 6 (HeuristicFareStrategy, claude.md §29). All

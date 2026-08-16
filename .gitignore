@@ -1,3 +1,5 @@
+# Applies repo-wide (monorepo: backend/, and later frontend/) — none of
+# these patterns contain an internal slash, so git matches them at any depth.
 node_modules/
 dist/
 coverage/
@@ -11,4 +13,6 @@ npm-debug.log*
 
 .DS_Store
 
-/src/generated/prisma
+# Backend-specific: generated Prisma client. Root-anchored on purpose —
+# unlike the patterns above, this one only exists under backend/.
+backend/src/generated/prisma

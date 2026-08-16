@@ -5,12 +5,12 @@ the conventions in use, the invariants that must hold, and the traps that have
 already caught someone once.
 
 This file is deliberately short. It does not explain how Rydex works — that is
-[`docs/architecture.md`](./docs/architecture.md).
+[`docs/architecture.md`](./architecture.md).
 
 | Document | Answers |
 |---|---|
-| [`README.md`](./README.md) | What is Rydex, and how do I run it? |
-| [`docs/architecture.md`](./docs/architecture.md) | How is Rydex designed? |
+| [`README.md`](../README.md) | What is Rydex, and how do I run it? |
+| [`docs/architecture.md`](./architecture.md) | How is Rydex designed? |
 | [`steps.md`](./steps.md) | How was it built, what was learned, what's next? |
 | **`claude.md`** | What must I keep in mind while changing it? |
 

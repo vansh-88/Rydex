@@ -4,7 +4,7 @@ How Rydex was built: the order the system came together in, what each stage
 turned out to require, and the bugs that changed the design along the way.
 
 This is the project's history and forward roadmap. For how the system is
-designed today, see [`docs/architecture.md`](./docs/architecture.md); for the
+designed today, see [`docs/architecture.md`](./architecture.md); for the
 rules that constrain changes to it, see [`claude.md`](./claude.md).
 
 ---
@@ -1796,7 +1796,7 @@ Recurring themes worth noticing across the entries below:
 A note on `§N` references: entries below cite section numbers from the earlier
 single-file version of the architecture document, as do comments throughout
 `src/`. That document was later split — its architecture content is now
-[`docs/architecture.md`](./docs/architecture.md) and its rules are `claude.md`
+[`docs/architecture.md`](./architecture.md) and its rules are `claude.md`
 §1–§14. The original numbers are preserved here rather than rewritten, because
 the source comments reference them.
 
@@ -2495,6 +2495,30 @@ regardless of the drift.*
     after a worker dies mid-job rather than 30s — acceptable because every
     Rydex job is short.
 
+### 2026-08-16 (Idle polling cut again: drainDelay 60s -> 300s)
+
+-   **`QUEUE_DRAIN_DELAY_SECONDS` default raised from 60 to 300**, taking idle
+    Redis command volume from ~34,600/day to a measured **~10,300/day** — chosen
+    so the figure fits a command-metered free tier with headroom rather than
+    sitting near its ceiling. This settles the Redis-provider question the
+    Phase 16 plan had flagged as blocking: option A (confirm the allowance
+    covers it) is now comfortable on any plan metering in the tens of thousands.
+-   **Re-measured rather than extrapolated, and the earlier model turned out to
+    under-predict.** `3 * 8 * (86400 / drainDelay)` gives ~6,900/day at 300s;
+    the measurement (app idle, docker healthcheck subtracted) is ~10,300/day.
+    The per-drain-cycle cost is a *floor* — the stalled-job sweep and the
+    Socket.IO Redis adapter's pub/sub connections are fixed overheads that were
+    negligible against 5s and 60s cycles and are not against a 300s one. The
+    documented figures are now the measured ones, and the formula is labelled
+    as a floor.
+-   **Verified the thing actually at risk: delayed-job precision.** Seat-hold
+    expiry (§35/§36) is a delayed BullMQ job, and a 300s drain cycle raises the
+    obvious worry that it fires up to five minutes late. It does not —
+    `BZPOPMIN` wakes on push rather than on the drain cycle. Probe jobs
+    scheduled at +5s / +15s / +30s fired at +341ms / +108ms / +187ms against
+    their schedules. The genuine trade-off is unchanged: a worker that dies
+    mid-job has it reclaimed after up to `QUEUE_STALLED_INTERVAL_SECONDS`.
+
 ### 2026-08-16 (Ratings built; reputation split by role)
 
 -   **Ratings moved from scaffolding to a working feature.**
@@ -2563,7 +2587,7 @@ Render's free tier sleeps when idle, and because the workers share the API
 process, delayed jobs fire late on wake — they are not lost, which was confirmed
 locally. Upstash meters per command, and an idle Rydex spends real commands on
 BullMQ polling; tuning the drain and stalled intervals cut that from roughly
-478,000 to 34,600 commands per day without delaying any job.
+478,000 to ~10,300 commands per day without delaying any job.
 
 No Dockerfile is required for this target. Render builds the Node service
 directly from the repository, so an image would be an artifact to maintain with
@@ -2632,8 +2656,8 @@ production:
 BullMQ defaults (drainDelay 5s, stalledInterval 30s)
     332 commands/minute   ->  ~478,000/day at rest
 
-tuned (drainDelay 60s, stalledInterval 300s)  <- current setting
-     24 commands/minute   ->   ~34,600/day at rest
+tuned (drainDelay 300s, stalledInterval 300s)  <- current setting
+      7 commands/minute   ->   ~10,300/day at rest
 ```
 
 The cost is deterministic: each Worker issues 8 commands per drain cycle
@@ -2641,12 +2665,18 @@ The cost is deterministic: each Worker issues 8 commands per drain cycle
 so with three Workers:
 
 ``` text
-idle commands/day = 3 * 8 * (86400 / QUEUE_DRAIN_DELAY_SECONDS)
+idle commands/day >= 3 * 8 * (86400 / QUEUE_DRAIN_DELAY_SECONDS)
 
-    drainDelay   5s  ->  ~415,000/day
-    drainDelay  60s  ->   ~34,600/day   (current default)
-    drainDelay 300s  ->    ~6,900/day
+    drainDelay   5s  ->  ~415,000/day floor   (measured ~478,000)
+    drainDelay  60s  ->   ~34,600/day floor   (measured ~34,600)
+    drainDelay 300s  ->    ~6,900/day floor   (measured ~10,300)  <- current
 ```
+
+The drain cycle is a *floor*, not the whole cost: the stalled-job sweep and the
+Socket.IO Redis adapter's pub/sub connections contribute too. At 5s and 60s the
+drain cycle dominates and the model is close; at 300s the fixed overheads are no
+longer negligible and the model under-predicts by ~50%. Quote the measured
+figure, not the formula.
 
 Both knobs are configuration, not code: `QUEUE_DRAIN_DELAY_SECONDS` and
 `QUEUE_STALLED_INTERVAL_SECONDS`. Choosing a value for the target plan is a
@@ -2670,17 +2700,23 @@ BullMQ's default 30s. Rydex's jobs are short (release a seat, submit a refund,
 send a notification), so a longer window costs latency after a crash, not
 correctness.
 
-#### Redis provider decision
-
-Still to confirm at signup, now against a much smaller number:
+#### Redis provider decision --- settled
 
 ``` text
-A  Confirm the chosen plan's command allowance covers ~34,600/day
-   (or lower QUEUE_DRAIN_DELAY_SECONDS further --- 300s gives ~6,900/day).
-
-B  Use a Redis whose free tier is sized by memory/connections rather than
-   command count (e.g. Render's own Redis, Redis Cloud free).
+QUEUE_DRAIN_DELAY_SECONDS = 300   ->   ~10,300 commands/day idle (measured)
 ```
+
+This was the one blocking decision in the Phase 16 plan. It is resolved by
+configuration rather than by provider choice: at 300s the idle figure sits far
+enough below a typical command-metered free tier that the allowance is no longer
+the deciding factor, so any of Upstash, Render's own Redis, or Redis Cloud free
+will do. Confirm the chosen plan's allowance covers ~10,300/day at signup; if a
+plan is tighter than that, prefer one sized by memory/connections instead.
+
+The value was chosen by measurement, not arithmetic --- the per-drain-cycle
+formula under-predicts at this interval (see the decision log entry for
+2026-08-16). Delayed-job precision was re-verified at 300s before adopting it,
+because seat-hold expiry depends on it.
 
 Dropping BullMQ is not an option: seat-hold expiry is what releases seats
 held by unpaid bookings (§35/§36).

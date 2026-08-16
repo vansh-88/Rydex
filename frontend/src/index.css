@@ -1,0 +1,65 @@
+@import 'tailwindcss';
+
+/* Design tokens. Utility density over marketing polish — the reference is a
+   rail/intercity-bus booking interface, not a SaaS dashboard.
+
+   One accent (deep teal) carries primary actions, links and active states.
+   Green/amber/red are deliberately NOT used for actions: they are reserved
+   for the status system, because Rydex surfaces 6 ride statuses and 5 booking
+   statuses on nearly every screen and those pills have to stay unambiguous. */
+@theme {
+  --color-accent-50: #f0fdfa;
+  --color-accent-100: #ccfbf1;
+  --color-accent-200: #99f6e4;
+  --color-accent-300: #5eead4;
+  --color-accent-400: #2dd4bf;
+  --color-accent-500: #14b8a6;
+  --color-accent-600: #0d9488;
+  --color-accent-700: #0f766e;
+  --color-accent-800: #115e59;
+  --color-accent-900: #134e4a;
+
+  /* Semantic surfaces/text, so components never hard-code a slate step. */
+  --color-canvas: #f8fafc;
+  --color-surface: #ffffff;
+  --color-border-subtle: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-ink-faint: #94a3b8;
+
+  --radius-card: 0.5rem;
+
+  --font-sans:
+    'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+
+  /* Fares, distances, seat counts and countdowns all stack in vertical lists.
+     Proportional digits make those columns visibly ragged, so lining tabular
+     figures are the default and opted out of rather than into. */
+  body {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    @apply outline-accent-700 outline-2 outline-offset-2;
+  }
+
+  /* Leaflet ships its own font sizing that fights the app's scale. */
+  .leaflet-container {
+    @apply font-sans;
+  }
+}
+
+@utility no-tabular {
+  font-variant-numeric: normal;
+}

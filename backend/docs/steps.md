@@ -2611,11 +2611,47 @@ the deployed path surfaced it — this is precisely the class of defect Phase 17
 exists to find, and it could not have been reproduced locally without a proxy in
 front.
 
+### 2026-08-16 (Phase 16 landed; Phase 17 infrastructure verified)
+
+The deployment went up on Render + Supabase + Upstash and the infrastructure half
+of Phase 17 was worked through against it. Four things are worth recording because
+they were not obvious from the plan.
+
+-   **The written build command could not have worked.** It ordered
+    `npm run build` before `npx prisma generate`, but the Prisma client is
+    generated *into* `src/generated/prisma`, that path is gitignored, and
+    `prismaClient.ts` imports from it at compile time — so `tsc` had nothing to
+    resolve. It also used a bare `npm ci`, which omits `devDependencies` when
+    `NODE_ENV=production`, and `tsc`/`prisma`/`tsx` all live there. Corrected in
+    §20 to `npm ci --include=dev && npx prisma generate && npm run build`.
+-   **Supabase's direct endpoint is unusable from Render's free tier.**
+    `db.<ref>.supabase.co` is IPv6-only and the free egress is IPv4, so
+    `DATABASE_URL` points at the Supavisor **session** pooler. Session rather than
+    transaction mode because one URL has to serve both the running app and
+    `prisma migrate deploy` — transaction pooling breaks the advisory locks
+    migrations take, and no `DIRECT_URL` is wired.
+-   **Migrations cannot run on Render at all on this tier.** There is no
+    pre-deploy command, and `prisma.config.ts` imports `config/env.ts`, so every
+    Prisma CLI invocation validates all 81 vars and fires the production
+    assertions. They are run from a developer machine with
+    `NODE_ENV=development` instead. That is a deliberate operational choice, not
+    an oversight, and it should be revisited if the instance is ever upgraded.
+-   **The `rides` GiST indexes survived**, breaking a three-occurrence streak —
+    but their *use* could not be demonstrated, because `rides` holds no rows and
+    the planner correctly prefers the btree at that size. Recorded as blocked
+    rather than passed. The distinction matters: "the index exists" and "the
+    query uses it" are separate claims, and only the first is currently
+    supportable.
+
+Also noted, not fixed: TLS to Supabase is encrypted but not certificate-verified,
+because `sslmode=require` is libpq's encrypt-without-validating mode. Closing it
+means `verify-full` plus Supabase's CA bundle.
+
 ---
 
 # 20. Roadmap
 
-## Phase 16 — Deployment (next)
+## Phase 16 — Deployment (complete)
 
 The immediate target is a portfolio deployment on free tiers: Render for the Node
 service, Supabase for PostgreSQL + PostGIS, Upstash for Redis. It is explicitly
@@ -2765,7 +2801,9 @@ held by unpaid bookings (§35/§36).
 Determined from the actual `package.json` and `src/server.ts`:
 
 ``` text
-build command      npm ci && npm run build && npx prisma generate
+root directory     backend              (the repo is a monorepo; there is no
+                                        package.json at the repo root)
+build command      npm ci --include=dev && npx prisma generate && npm run build
 start command      npm start            (node dist/server.js)
 Node runtime       >= 20.11.0           (package.json engines)
 PORT               already read from env (config/env.ts) --- Render sets it
@@ -2773,6 +2811,23 @@ NODE_ENV           production
 health endpoint    GET /health   (liveness, static)
 readiness          GET /ready    (checks PostgreSQL + Redis, 503 on failure)
 ```
+
+Both halves of that build command are load-bearing, and an earlier draft of this
+section had them wrong in both respects:
+
+``` text
+--include=dev     `tsc`, `prisma` and `tsx` are devDependencies, and npm omits
+                  those when NODE_ENV=production --- which it is here. Without
+                  the flag the build dies at `tsc: not found`.
+generate BEFORE   the Prisma client is generated INTO src/generated/prisma,
+build             that path is gitignored, and prismaClient.ts imports from it
+                  at compile time. Running `tsc` first cannot resolve the
+                  import. Generate, then compile --- never the reverse.
+```
+
+Health checks must point at `/health`, not `/ready`: `/ready` pings PostgreSQL and
+Redis on every call, which bills Upstash commands on a schedule and returns 503
+during a cold start, causing a restart loop on an instance that sleeps.
 
 Configuration changes required at deploy time (these are Phase 16
 implementation work, not documentation):
@@ -2922,10 +2977,38 @@ instead of its native Node runtime, this decision should be revisited.
 [ ] core API smoke verification passes
 ```
 
-### Status: not started
+### Status: complete (2026-08-16)
 
-Phase 16 is the next milestone. The blocking decision above must be resolved
-first.
+Deployed and reachable at `https://rydex-4efi.onrender.com`. The Redis blocking
+decision resolved as option A: Upstash retained, with the idle command cost held
+at roughly 6,900/day by `QUEUE_DRAIN_DELAY_SECONDS=300`.
+
+What the deployment actually looks like, where it differs from the plan above:
+
+``` text
+Render        root directory `backend`, free instance, health check /health
+Supabase      Supavisor SESSION pooler on port 5432, not the direct endpoint ---
+              db.<ref>.supabase.co is IPv6-only and Render's free egress is
+              IPv4. Session mode (not transaction mode) because a single
+              DATABASE_URL serves both the app and `prisma migrate deploy`,
+              and no DIRECT_URL is wired.
+Upstash       rediss:// TCP endpoint; ioredis takes TLS from the scheme, so no
+              code change was needed
+migrations    run from a developer machine, not on Render. The free tier has no
+              pre-deploy command, and prisma.config.ts imports config/env.ts ---
+              so every Prisma CLI call validates all 81 vars and would trip the
+              production assertions. Running locally with
+              NODE_ENV=development sidesteps that.
+```
+
+Verified at deploy time: all 10 migrations applied, PostGIS 3.3 present,
+`search_path` resolves `ST_*`, **both spatial GiST indexes survived the migration**
+(the §22 hazard did not recur here), admin seeded, TLS 1.3 to Supabase, and
+`GET /ready` returning 200 --- which exercises PostgreSQL and Redis together.
+
+Not equivalent to production, and deliberately so: Razorpay runs in test mode, the
+instance sleeps when idle, and the free tier keeps no log retention. See Phase 17
+for what that costs.
 
 ------------------------------------------------------------------------
 
@@ -3167,10 +3250,54 @@ User -> AI support          (tool calling, ownership boundary)
 [ ] no critical regression versus local Phase 15 verification
 ```
 
-### Status: not started
+### Status: in progress (started 2026-08-16)
 
-Blocked on Phase 16. Phase 17 cannot begin until there is a deployment to
-verify.
+Unblocked by Phase 16. **Infrastructure is verified; no business journey has been
+run yet**, so the checklists above stand with only the infrastructure items
+closed. Nothing here was tested by a suite --- verification means driving the
+deployed application by hand (§14), and the wording below says which.
+
+**Verified against the deployment:**
+
+``` text
+Render      HTTPS reachable; GET /health 200; GET /ready 200 (proves PostgreSQL
+            and Redis together); CORS accepts the configured origin and emits no
+            Access-Control-Allow-Origin for others; Socket.IO handshake succeeds
+            through the proxy and advertises the websocket upgrade; helmet CSP +
+            HSTS present and x-powered-by absent; auth gate returns the documented
+            401 envelope with a requestId
+Supabase    TLS 1.3 (TLS_AES_256_GCM_SHA384, CN *.pooler.supabase.com); all 10
+            migrations applied; PostGIS 3.3; search_path resolves ST_*; both
+            rides_origin_gist and rides_destination_gist present; admin seeded
+Upstash     reachable (via /ready); rate-limit counters increment and expose
+            RateLimit-Limit/Remaining/Reset
+```
+
+**One HIGH-severity defect found and fixed** --- `TRUST_PROXY=true` did not yield
+real client IPs but *client-supplied* ones, making every per-IP rate limit
+bypassable. Full account in the §19 entry for this date; closed and re-verified on
+the deployment.
+
+**Open, and honestly open rather than quietly ticked:**
+
+``` text
+GiST index USE       blocked, not passed. The indexes exist, but `rides` holds 0
+                     rows, so the planner correctly prefers the btree on
+                     (departure_time, status) and applies ST_DWithin as a filter.
+                     Provable only once representative data exists.
+TLS verification     encrypted but NOT certificate-verified: sslmode=require is
+                     libpq's encrypt-without-validating mode. verify-full plus
+                     Supabase's CA would close it.
+FCM push             not verifiable --- no client application exists to obtain a
+                     device token. Recorded as N/A rather than untested.
+every journey        driver, passenger, ride, booking, payment webhook,
+                     cancellation, refund, ratings, chat and AI support all
+                     remain unrun against the deployment.
+```
+
+The remaining work is the journeys, and the payment webhook is the item that
+carries the most information --- it is the only part of the system that cannot be
+exercised locally at all.
 
 ------------------------------------------------------------------------
 

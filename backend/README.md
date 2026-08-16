@@ -187,8 +187,21 @@ console or stub implementation when unconfigured.
 | Phase | Status |
 |---|---|
 | 0–15 — implementation, verification, hardening | **Complete** |
-| 16 — deployment (Render + Supabase + Upstash) | **Next** |
-| 17 — end-to-end verification against the deployment | Blocked on 16 |
+| 16 — deployment (Render + Supabase + Upstash) | **Complete** |
+| 17 — end-to-end verification against the deployment | **In progress** — infrastructure verified, journeys pending |
+
+Deployed at `https://rydex-4efi.onrender.com`. This is a **free-tier portfolio
+deployment, not a production stack**: Razorpay runs in test mode, the instance
+sleeps when idle (so delayed jobs such as seat-hold expiry fire late on wake), and
+there is no log retention.
+
+Phase 17's infrastructure pass is done — HTTPS, health and readiness, CORS,
+Socket.IO through the proxy, TLS to Supabase, all 10 migrations, PostGIS and both
+spatial indexes, and Redis-backed rate limiting. It also found and closed a
+HIGH-severity defect that could not have surfaced locally: `trust proxy` was
+configured so that `req.ip` came from a client-supplied header, making every
+per-IP rate limit bypassable. The business journeys — including the Razorpay
+webhook against the public URL — are still to be run.
 
 Deliberately **out of scope** — decisions, not omissions, each with its reasoning
 in [`docs/steps.md`](docs/steps.md) §21: automated tests · structured logging ·

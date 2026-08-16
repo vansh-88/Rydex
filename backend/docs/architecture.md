@@ -1770,14 +1770,32 @@ undefined state is worse than restarting.
 
 ## 21. Deployment
 
-### Current state: **not deployed**
+### Current state: **deployed (portfolio/demo)**
 
-Phase 16 has not started. The application runs locally against
-`docker-compose.yml`, which provides **development infrastructure only**
-(`postgis/postgis:16-3.4`, `redis:7-alpine`). There is no Dockerfile, no CI
-pipeline, and no deployed environment.
+Phase 16 is complete. The backend runs on Render at
+`https://rydex-4efi.onrender.com`, against Supabase (PostgreSQL + PostGIS) and
+Upstash (Redis). Phase 17, the end-to-end verification of that deployment, is in
+progress: the infrastructure is verified, the business journeys are not yet.
 
-### Planned — portfolio/demo (Phase 16)
+There is still **no Dockerfile and no CI pipeline** — Render builds the Node
+service directly from the repository, so an image would be an artifact to maintain
+with nothing to show for it. `docker-compose.yml` remains **development
+infrastructure only** (`postgis/postgis:16-3.4`, `redis:7-alpine`) and is not what
+runs in the deployed environment.
+
+Deployment specifics that are not obvious from the diagram below: the repository is
+a monorepo, so Render's root directory is `backend`; `DATABASE_URL` points at
+Supabase's Supavisor **session** pooler rather than the direct endpoint, which is
+IPv6-only and therefore unreachable from Render's IPv4 egress; and migrations are
+run from a developer machine, because the free tier has no pre-deploy command and
+`prisma.config.ts` pulls in the full environment validation. Full account in
+`steps.md` §19/§20.
+
+**This is not a production stack**, and the gap is deliberate rather than
+accidental — Razorpay runs in test mode, the instance sleeps when idle, and the
+free tier keeps no log retention (§22 for what that costs).
+
+### Deployed — portfolio/demo (Phase 16)
 
 ```mermaid
 flowchart TB
@@ -1939,8 +1957,23 @@ automated guard and has now been needed **three times** — most recently on a
 migration that did not touch `rides` at all. A CI check asserting both indexes
 exist would be the right fix, but there is no CI.
 
-**Not deployed.** Phase 16, then Phase 17 end-to-end verification — the only
-forward-looking work in the project.
+**Deployed, but not fully verified.** Phase 16 is complete; Phase 17's end-to-end
+verification of that deployment is the only forward-looking work left. The
+infrastructure half is verified — and it immediately surfaced a HIGH-severity
+defect that no local run could have found, where `trust proxy` was set such that
+`req.ip` came from a client-supplied header and every per-IP rate limit was
+bypassable (fixed; `steps.md` §19). The business journeys, including the Razorpay
+webhook against the public URL, remain unrun.
+
+**The money-failure paths are correct but unmonitorable.** Every unrecoverable
+financial branch — a final payment that succeeds against a booking no longer
+`CONFIRMED`, a final payment that fails outright, a final-payment order that never
+gets created, a refund with no resolvable original — terminates in a
+`console.error`. Locally that was fine, because a webhook could be replayed by
+hand. On a free-tier instance with no log retention, no structured logging and no
+alerting, those signals are effectively invisible, and state advances *only* on
+webhook delivery. The deployment did not create these gaps, but it materially
+raised their severity.
 
 **Admin list endpoints are pending-only** and ignore a `?status=` parameter, so
 historical decisions can't be reviewed through the API.

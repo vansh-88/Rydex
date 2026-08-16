@@ -20,8 +20,25 @@ This file is deliberately short. It does not explain how Rydex works — that is
 
 ```
 Phases 0–15   complete, manual runtime-verified.
-Phase 16      next — deployment
+Phase 16      complete — deployed on Render + Supabase + Upstash
+Phase 17      in progress — infrastructure verified, journeys not yet
 ```
+
+Live at `https://rydex-4efi.onrender.com`. It is a **free-tier portfolio
+deployment, not a production stack** — Razorpay is in test mode, the instance
+sleeps when idle (so BullMQ delayed jobs, including seat-hold expiry, fire late on
+wake), and there is no log retention.
+
+Two things to keep in mind when changing anything that touches them:
+
+- **`trust proxy` is a hop count, never `true`.** `true` trusts every hop and
+  makes `req.ip` the leftmost, client-supplied `X-Forwarded-For` entry, which made
+  every per-IP rate limit bypassable in the deployed environment. It must equal
+  the number of proxies that actually append to the header — 1 behind Render.
+- **The money-failure paths end in `console.error`.** With no log retention or
+  alerting, a final payment that fails, or one that succeeds against a booking
+  that has moved on, is invisible in practice. Don't treat those branches as
+  handled just because they are written.
 
 Implemented: OTP auth with token rotation · user profiles and driver-licence
 applications · vehicles and documents · admin verification · map provider and
@@ -36,8 +53,9 @@ metrics and tracing · OpenAPI · DigiLocker document verification · SOS · liv
 ride tracking · wallet · coupons · support tickets · blocked users · audit log ·
 monthly passes.
 
-The only forward-looking work is Phase 16 (deployment) and Phase 17 (verifying
-it).
+The only forward-looking work is finishing Phase 17 — driving the business
+journeys against the deployment. The payment webhook is the part that matters
+most: it is the one thing that cannot be exercised locally at all.
 
 ---
 
@@ -382,7 +400,12 @@ payments · call a map API per search result · trust frontend-reported payment
 success, fare, seats or role · mutate booking/ride status from a controller ·
 make external calls inside a transaction · put secrets in source · duplicate a
 business rule · use offset pagination · expose raw database errors · claim tests,
-logging, metrics, OpenAPI or a deployment exist.
+structured logging, metrics or OpenAPI exist.
+
+A deployment now *does* exist (§1), so describing it is accurate — but describe it
+as what it is: a free-tier portfolio target whose business journeys are still
+unverified. Don't call Phase 17 done, and don't call anything "tested" when it was
+driven by hand.
 
 ---
 

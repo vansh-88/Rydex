@@ -42,9 +42,10 @@ const OUTCOME_BY_EVENT: Record<string, PaymentOutcome> = {
 
 // claude.md §40 webhook flow: verify signature -> identify transaction ->
 // idempotency check -> update payment -> update booking/ride state ->
-// enqueue notifications. Notification enqueueing is Phase 12's job (no
-// Notification module exists yet) — deliberately not built here; the state
-// transition itself is the part that must not silently regress.
+// enqueue notifications. All five steps are implemented here; the
+// notification enqueueing happens after the transaction commits, at the
+// bottom of this function, so a notification is never sent for a state
+// change that then rolls back.
 export async function processPaymentWebhook(rawBody: Buffer, signature: string | undefined): Promise<void> {
   if (signature === undefined || !paymentProvider.verifyWebhookSignature(rawBody, signature)) {
     throw new AppError(401, 'INVALID_WEBHOOK_SIGNATURE', 'Webhook signature verification failed');

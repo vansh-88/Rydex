@@ -92,7 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [reconcileRoleClaim]);
 
   const signIn = useCallback(async (tokens: AuthTokens) => {
     tokenStore.setTokens(tokens);

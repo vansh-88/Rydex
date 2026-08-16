@@ -39,7 +39,7 @@ a component library.
 |---|---|
 | `react-router-dom` | Routing, nested layouts, URL params |
 | `socket.io-client` | The backend runs a Socket.IO server; its handshake, packet framing and acks are a protocol a raw WebSocket cannot speak |
-| `leaflet` / `react-leaflet` | Tile rendering and GeoJSON route display |
+| `leaflet` | Tile rendering and GeoJSON route display (driven directly; `react-leaflet` was removed as unused) |
 | `lucide-react` | SVG icon paths only — no behaviour or markup |
 | `tailwind-merge` | Needs a real model of Tailwind's class groups to resolve conflicts |
 | `zod` | Client-side form validation (the backend validates authoritatively regardless) |
@@ -63,6 +63,19 @@ src/
 
 `/_kitchen-sink` renders every primitive in every state — the fastest way to
 check a design-system change without clicking through the product.
+
+## Bundle
+
+Code-split so the booking path stays small. Leaflet (maps), socket.io-client
+(chat) and the admin console are each loaded only when reached:
+
+| Chunk | gzipped | Loaded when |
+|---|---|---|
+| main | ~137 KB | always |
+| `RouteMap` | ~44 KB | ride detail, offer preview |
+| `Messages` | ~16 KB | ride chat |
+| `Support` | ~2.5 KB | help |
+| admin (4 chunks) | ~5 KB | admin accounts only |
 
 ## Things the API forces on the UI
 

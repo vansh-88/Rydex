@@ -174,7 +174,7 @@ export function Support() {
           )}
         </div>
 
-        <Card className="flex h-[70vh] flex-col overflow-hidden">
+        <Card className="flex h-[70dvh] min-h-96 flex-col overflow-hidden">
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
             {visible.length === 0 && !sending ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 text-center">

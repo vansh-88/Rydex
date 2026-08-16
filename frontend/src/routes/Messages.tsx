@@ -125,7 +125,7 @@ export function Messages() {
         </div>
 
         {conversationId !== undefined ? (
-          <Card className="flex h-[70vh] flex-col overflow-hidden">
+          <Card className="flex h-[70dvh] min-h-96 flex-col overflow-hidden">
             <div className="flex items-center gap-2 border-b border-border-subtle p-3">
               <button
                 type="button"

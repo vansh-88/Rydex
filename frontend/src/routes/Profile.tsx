@@ -6,7 +6,7 @@ import { updateMe } from '@/api/endpoints/auth';
 import { useApiMutation } from '@/api/hooks';
 import { useAuth } from '@/auth/AuthProvider';
 import { RatingDisplay } from '@/components/domain/StarRating';
-import { InlineError } from '@/components/domain/States';
+import { ErrorState, InlineError } from '@/components/domain/States';
 import { StatusPill } from '@/components/domain/StatusPill';
 import { Button, buttonStyles } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -28,7 +28,22 @@ export function Profile() {
     },
   });
 
-  if (user === null) return null;
+  // RequireAuth guarantees a session, but the profile fetch can still have
+  // failed (AuthProvider keeps the session rather than signing the user out
+  // over a transient error). Rendering nothing would leave a blank page with
+  // no way forward, so offer the retry instead.
+  if (user === null) {
+    return (
+      <div className="mx-auto max-w-2xl py-8">
+        <ErrorState
+          error={undefined}
+          onRetry={() => {
+            void refreshUser();
+          }}
+        />
+      </div>
+    );
+  }
 
   const dirty = name !== user.name || phone !== user.phone;
 

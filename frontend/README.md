@@ -78,6 +78,7 @@ check a design-system change without clicking through the product.
   never assumed.
 - **Ownership failures return 404, not 403**, so not-found copy doubles as
   permission-denied copy.
-- **`routeGeometry` is ~10 KB per ride** — detail views only, never lists.
+- **`routeGeometry` is large** — measured at 53 KB of GeoJSON for a 302 km
+  Delhi→Jaipur route. Detail views only, never lists.
 - **No review history exists.** `GET /bookings/:id/ratings` returns only ratings
   you gave or received, so ratings show as aggregates (`4.8 ★ (23)`) only.

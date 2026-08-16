@@ -1,40 +1,49 @@
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '@/auth/AuthProvider';
-import { buttonStyles } from '@/components/ui/Button';
-import { Card, CardBody } from '@/components/ui/Card';
+import { SearchForm } from '@/features/search/SearchForm';
+import { criteriaToSearchParams, type SearchCriteria } from '@/features/search/searchParams';
 
-// Phase 2 version: enough of a landing page to exercise the shell and the
-// signed-in/anonymous split. The real search form (From / To / Date, backed by
-// place autocomplete) and the signed-in obligations list arrive in Phase 3
-// and Phase 5.
 export function Home() {
+  const navigate = useNavigate();
   const { status, user } = useAuth();
 
-  return (
-    <div className="mx-auto max-w-2xl py-8">
-      <h1 className="text-3xl font-semibold tracking-tight text-ink">
-        {status === 'authenticated' ? `Welcome back, ${user?.name.split(' ')[0] ?? ''}` : 'Share the ride'}
-      </h1>
-      <p className="mt-2 text-ink-muted">
-        Rydex matches you with drivers already making your journey, and splits the cost.
-      </p>
+  function handleSearch(criteria: SearchCriteria) {
+    const search = `?${criteriaToSearchParams(criteria).toString()}`;
 
-      <Card className="mt-8">
-        <CardBody className="space-y-4">
-          <p className="text-sm text-ink-muted">
-            The search form lands in Phase 3, along with place autocomplete and results.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Link to="/search" className={buttonStyles()}>
-              Find a ride
-            </Link>
-            <Link to="/offer" className={buttonStyles({ variant: 'secondary' })}>
-              Offer a ride
-            </Link>
-          </div>
-        </CardBody>
-      </Card>
+    // GET /rides/search requires authentication, so an anonymous visitor
+    // cannot run this query. Rather than blocking the form up front — a real
+    // search is a far better reason to sign up than a bare "Sign in" button —
+    // the criteria are carried through login and executed on arrival.
+    if (status !== 'authenticated') {
+      navigate('/login', { state: { from: { pathname: '/search', search } } });
+      return;
+    }
+
+    navigate(`/search${search}`);
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl py-6 sm:py-10">
+      <div className="max-w-2xl">
+        <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+          {status === 'authenticated'
+            ? `Where to, ${user?.name.split(' ')[0] ?? 'there'}?`
+            : 'Share the ride, split the cost'}
+        </h1>
+        <p className="mt-2 text-ink-muted">
+          Rydex connects you with drivers already making your journey.
+        </p>
+      </div>
+
+      <div className="mt-8 rounded-card border border-border-subtle bg-surface p-4 sm:p-6">
+        <SearchForm onSubmit={handleSearch} />
+      </div>
+
+      <p className="mt-3 text-sm text-ink-faint">
+        Rides are matched within 10 km of both your pickup and your destination, on the date you
+        choose.
+      </p>
     </div>
   );
 }

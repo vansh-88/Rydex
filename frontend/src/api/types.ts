@@ -138,6 +138,21 @@ export interface Ride {
   updatedAt: string;
 }
 
+// GET /rides/:id returns this — RideDto plus the driver and vehicle facts a
+// passenger needs to decide, which the bare ride row does not carry.
+export interface RideDetail extends Ride {
+  driver: { id: string; name: string; rating: number | null };
+  vehicle: {
+    id: string;
+    make: string;
+    model: string;
+    registrationNumber: string;
+    vehicleType: VehicleType;
+    isAc: boolean;
+    seatCapacity: number;
+  };
+}
+
 // GET /rides/search. Deliberately has no addresses and no geometry — the
 // backend returns only how far each ride is from the points you asked about.
 export interface RideSearchResult {

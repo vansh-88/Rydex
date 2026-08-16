@@ -12,6 +12,7 @@ import {
   type TripScope,
 } from '../../../shared/pagination/keysetCursor.js';
 import * as userRepository from '../../user/repositories/userRepository.js';
+import * as vehicleRepository from '../../vehicle/repositories/vehicleRepository.js';
 import * as bookingRepository from '../../booking/repositories/bookingRepository.js';
 import { cancelScheduledBookingExpiry } from '../../booking/services/bookingExpiryService.js';
 import { createFinalPaymentOrdersForRide } from '../../booking/services/finalPaymentService.js';
@@ -159,12 +160,65 @@ export async function createRide(
   };
 }
 
-export async function getRide(rideId: string): Promise<RideDto> {
+// RideDto carries only `driverId`/`vehicleId`, which is enough for the write
+// paths but not for the screen a passenger decides on: who is driving, how
+// they are rated, and what car it is are exactly the facts that decision
+// needs. Search results already return them, so a detail view returning less
+// than its own list view would be a strange asymmetry.
+export interface RideDetailDto extends RideDto {
+  driver: { id: string; name: string; rating: number | null };
+  vehicle: {
+    id: string;
+    make: string;
+    model: string;
+    // Shown so a passenger can identify the car at pickup. A number plate is
+    // visible to anyone standing on the street, so it is not treated as
+    // contact information the way a phone number is.
+    registrationNumber: string;
+    vehicleType: string;
+    isAc: boolean;
+    seatCapacity: number;
+  };
+}
+
+export async function getRide(rideId: string): Promise<RideDetailDto> {
   const ride = await rideRepository.findById(rideId);
   if (!ride) {
     throw new AppError(404, 'RIDE_NOT_FOUND', 'Ride not found');
   }
-  return toRideDto(ride);
+
+  // Two extra point reads on a detail endpoint, rather than widening the
+  // raw-SQL geography query in rideRepository.findById for the benefit of one
+  // caller.
+  const [driver, vehicle] = await Promise.all([
+    userRepository.findById(ride.driverId),
+    vehicleRepository.findById(ride.vehicleId),
+  ]);
+
+  if (!driver || !vehicle) {
+    // A ride cannot exist without both (FK-enforced, and the vehicle relation
+    // is onDelete: Restrict), so this is a corrupted row rather than a
+    // not-found ride — surfaced the same way regardless.
+    throw new AppError(404, 'RIDE_NOT_FOUND', 'Ride not found');
+  }
+
+  return {
+    ...toRideDto(ride),
+    driver: {
+      id: driver.id,
+      name: driver.name,
+      rating: driver.driverRatingAverage === null ? null : driver.driverRatingAverage.toNumber(),
+    },
+    vehicle: {
+      id: vehicle.id,
+      make: vehicle.make,
+      model: vehicle.model,
+      registrationNumber: vehicle.registrationNumber,
+      vehicleType: vehicle.vehicleType,
+      isAc: vehicle.isAc,
+      seatCapacity: vehicle.seatCapacity,
+    },
+  };
 }
 
 export interface RideSummaryDto {

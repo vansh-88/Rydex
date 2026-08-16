@@ -11,10 +11,10 @@ async function main(): Promise<void> {
   // claude.md §96: admins are provisioned directly (seed script or manual
   // DB insert), never via public self-registration.
   const admin = await prisma.user.upsert({
-    where: { email: 'admin@rydex.local' },
+    where: { email: 'rydex001@gmail.com' },
     update: {},
     create: {
-      email: 'admin@rydex.local',
+      email: 'rydex001@gmail.com',
       phone: '+910000000000',
       name: 'Rydex Admin',
       role: 'ADMIN',

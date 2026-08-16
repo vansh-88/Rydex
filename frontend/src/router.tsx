@@ -7,6 +7,7 @@ import { Home } from '@/routes/Home';
 import { KitchenSink } from '@/routes/KitchenSink';
 import { Login } from '@/routes/Login';
 import { NotFound } from '@/routes/NotFound';
+import { BookRide } from '@/routes/BookRide';
 import { Placeholder } from '@/routes/Placeholder';
 import { RideDetail } from '@/routes/RideDetail';
 import { SearchResults } from '@/routes/SearchResults';
@@ -41,10 +42,7 @@ export const router = createBrowserRouter([
             children: [
               { path: 'search', element: <SearchResults /> },
               { path: 'rides/:rideId', element: <RideDetail /> },
-              {
-                path: 'rides/:rideId/book',
-                element: <Placeholder title="Booking & payment" phase="Phase 4" />,
-              },
+              { path: 'rides/:rideId/book', element: <BookRide /> },
               { path: 'trips', element: <Placeholder title="My trips" phase="Phase 5" /> },
               {
                 path: 'trips/:bookingId',

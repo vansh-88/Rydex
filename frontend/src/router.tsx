@@ -9,12 +9,12 @@ import { Home } from '@/routes/Home';
 import { KitchenSink } from '@/routes/KitchenSink';
 import { Login } from '@/routes/Login';
 import { NotFound } from '@/routes/NotFound';
+import { Notifications } from '@/routes/Notifications';
 import { BecomeDriver } from '@/routes/BecomeDriver';
 import { BookRide } from '@/routes/BookRide';
 import { MyTrips } from '@/routes/MyTrips';
 import { ManageRide } from '@/routes/ManageRide';
 import { OfferRide } from '@/routes/OfferRide';
-import { Placeholder } from '@/routes/Placeholder';
 import { Profile } from '@/routes/Profile';
 import { RideDetail } from '@/routes/RideDetail';
 import { SearchResults } from '@/routes/SearchResults';
@@ -38,6 +38,11 @@ const AdminVehicles = lazy(async () => ({
 // of the main bundle means the search-and-book path never downloads it.
 const Messages = lazy(async () => ({
   default: (await import('@/routes/Messages')).Messages,
+}));
+
+// Support is a self-contained side feature, off the booking path.
+const Support = lazy(async () => ({
+  default: (await import('@/routes/Support')).Support,
 }));
 
 function LazyRoute({ children }: { children: React.ReactNode }) {
@@ -98,11 +103,15 @@ export const router = createBrowserRouter([
                   </LazyRoute>
                 ),
               },
+              { path: 'notifications', element: <Notifications /> },
               {
-                path: 'notifications',
-                element: <Placeholder title="Notifications" phase="Phase 10" />,
+                path: 'help',
+                element: (
+                  <LazyRoute>
+                    <Support />
+                  </LazyRoute>
+                ),
               },
-              { path: 'help', element: <Placeholder title="Support" phase="Phase 10" /> },
               { path: 'profile', element: <Profile /> },
 
               {

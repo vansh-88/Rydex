@@ -69,6 +69,7 @@ const COPY: Record<string, string> = {
   SUPPORT_CHAT_DAILY_LIMIT_REACHED: "You have reached today's support message limit.",
   MAP_PROVIDER_ERROR: 'We could not look up that location right now. Please try again.',
   GEOCODE_NOT_FOUND: 'We could not find that place. Try a nearby landmark or city.',
+  AI_PROVIDER_ERROR: 'Support could not answer that just now. Try rephrasing, or ask something simpler.',
   AI_PROVIDER_TIMEOUT: 'Support is taking too long to respond. Please try again.',
   AI_PROVIDER_RATE_LIMITED: 'Support is busy right now. Please try again shortly.',
   EMAIL_SEND_FAILED: 'We could not send that email. Please try again.',

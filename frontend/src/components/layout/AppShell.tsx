@@ -1,9 +1,10 @@
-import { Bell, ChevronDown, LogOut, Menu, Shield, User, X } from 'lucide-react';
+import { ChevronDown, CircleHelp, LogOut, Menu, Shield, User, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { buttonStyles } from '@/components/ui/Button';
+import { NotificationBell } from '@/components/layout/NotificationBell';
 import { cn } from '@/lib/cn';
 
 interface NavItem {
@@ -110,6 +111,18 @@ function AccountMenu() {
             </Link>
           )}
 
+          <Link
+            to="/help"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+            }}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-ink transition-colors hover:bg-slate-50"
+          >
+            <CircleHelp className="size-4 text-ink-faint" aria-hidden />
+            Help
+          </Link>
+
           <button
             type="button"
             role="menuitem"
@@ -168,13 +181,7 @@ export function AppShell() {
                 >
                   Offer a ride
                 </Link>
-                <Link
-                  to="/notifications"
-                  aria-label="Notifications"
-                  className="rounded-md p-2 text-ink-muted transition-colors hover:bg-slate-100 hover:text-ink"
-                >
-                  <Bell className="size-5" />
-                </Link>
+                <NotificationBell />
                 <AccountMenu />
                 <button
                   type="button"

@@ -13,6 +13,11 @@ export interface QueryOptions {
   // authority on payment state, so the client's only honest option is to ask
   // repeatedly until the status changes.
   refetchInterval?: number | false;
+  // Refetch when the tab regains focus. Off by default to stay inside the
+  // backend's read rate limits, but notifications need it: they arrive by FCM
+  // push and are never delivered over the socket, so returning to the tab is
+  // the only moment a web client can discover new ones.
+  refetchOnWindowFocus?: boolean;
 }
 
 export interface QueryResult<T> {
@@ -31,7 +36,11 @@ export function useApiQuery<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   options: QueryOptions = {},
 ): QueryResult<T> {
-  const { staleTime = DEFAULT_STALE_MS, refetchInterval = false } = options;
+  const {
+    staleTime = DEFAULT_STALE_MS,
+    refetchInterval = false,
+    refetchOnWindowFocus = false,
+  } = options;
 
   const cached = key !== null ? readCache<T>(key) : undefined;
   const [data, setData] = useState<T | undefined>(cached?.data);
@@ -107,6 +116,21 @@ export function useApiQuery<T>(
       window.clearInterval(timer);
     };
   }, [key, refetchInterval, run]);
+
+  useEffect(() => {
+    if (key === null || !refetchOnWindowFocus) return;
+
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') void run(key);
+    };
+    document.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onFocus);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [key, refetchOnWindowFocus, run]);
 
   const refetch = useCallback(() => {
     if (key !== null) void run(key);

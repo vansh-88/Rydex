@@ -1,6 +1,9 @@
 import { apiRequest, withQuery } from '@/api/client';
 import type {
+  Coordinates,
   Paginated,
+  PaymentOrder,
+  RidePreview,
   PlaceSuggestion,
   Ride,
   RideBooking,
@@ -17,6 +20,30 @@ export function autocompletePlaces(
   limit = 5,
 ): Promise<{ items: PlaceSuggestion[] }> {
   return apiRequest(withQuery('/places/autocomplete', { q: query, limit }), { signal });
+}
+
+export interface CreateRideInput {
+  origin: Coordinates;
+  originAddress?: string;
+  destination: Coordinates;
+  destinationAddress?: string;
+  departureTime: string;
+  vehicleId: string;
+  availableSeats: number;
+}
+
+// Dry run: same inputs as createRide, but nothing is written and no payment
+// order is created. Used to show the driver the fare and the posting fee
+// before they commit to paying it.
+export function previewRide(input: CreateRideInput, signal?: AbortSignal): Promise<RidePreview> {
+  return apiRequest('/rides/preview', { method: 'POST', body: input, signal });
+}
+
+export function createRide(
+  input: CreateRideInput,
+  idempotencyKey: string,
+): Promise<{ ride: Ride; paymentOrder: PaymentOrder }> {
+  return apiRequest('/rides', { method: 'POST', body: input, idempotencyKey });
 }
 
 export function searchRides(

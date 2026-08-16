@@ -13,6 +13,7 @@ import { DriverApplications } from '@/routes/admin/DriverApplications';
 import { BecomeDriver } from '@/routes/BecomeDriver';
 import { BookRide } from '@/routes/BookRide';
 import { MyTrips } from '@/routes/MyTrips';
+import { OfferRide } from '@/routes/OfferRide';
 import { Placeholder } from '@/routes/Placeholder';
 import { Profile } from '@/routes/Profile';
 import { RideDetail } from '@/routes/RideDetail';
@@ -54,7 +55,7 @@ export const router = createBrowserRouter([
               { path: 'rides/:rideId/book', element: <BookRide /> },
               { path: 'trips', element: <MyTrips /> },
               { path: 'trips/:bookingId', element: <TripDetail /> },
-              { path: 'offer', element: <Placeholder title="Offer a ride" phase="Phase 7" /> },
+              { path: 'offer', element: <OfferRide /> },
               {
                 path: 'rides/:rideId/manage',
                 element: <Placeholder title="Manage ride" phase="Phase 8" />,

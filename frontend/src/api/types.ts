@@ -184,6 +184,19 @@ export interface RideSearchParams {
   limit?: number;
 }
 
+// POST /rides/preview — computed, not persisted. The figures are reproducible
+// rather than estimated: fare depends only on route distance, vehicle type and
+// driver rating, so creating the ride yields the same numbers.
+export interface RidePreview {
+  distanceMeters: number;
+  durationSeconds: number;
+  routeGeometry: Geometry;
+  farePerSeat: number;
+  totalSeats: number;
+  postingCommissionAmount: number;
+  currency: string;
+}
+
 // GET /rides/mine
 export interface RideListItem {
   id: string;

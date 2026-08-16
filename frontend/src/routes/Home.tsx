@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthProvider';
 import { SearchForm } from '@/features/search/SearchForm';
 import { criteriaToSearchParams, type SearchCriteria } from '@/features/search/searchParams';
+import { UpNext } from '@/features/trips/UpNext';
 
 export function Home() {
   const navigate = useNavigate();
@@ -44,6 +45,8 @@ export function Home() {
         Rides are matched within 10 km of both your pickup and your destination, on the date you
         choose.
       </p>
+
+      {status === 'authenticated' && <UpNext />}
     </div>
   );
 }

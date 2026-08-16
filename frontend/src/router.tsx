@@ -8,9 +8,11 @@ import { KitchenSink } from '@/routes/KitchenSink';
 import { Login } from '@/routes/Login';
 import { NotFound } from '@/routes/NotFound';
 import { BookRide } from '@/routes/BookRide';
+import { MyTrips } from '@/routes/MyTrips';
 import { Placeholder } from '@/routes/Placeholder';
 import { RideDetail } from '@/routes/RideDetail';
 import { SearchResults } from '@/routes/SearchResults';
+import { TripDetail } from '@/routes/TripDetail';
 
 // One AuthProvider above everything, so login and the shell share a session
 // and a sign-in immediately updates the nav without a reload.
@@ -43,11 +45,8 @@ export const router = createBrowserRouter([
               { path: 'search', element: <SearchResults /> },
               { path: 'rides/:rideId', element: <RideDetail /> },
               { path: 'rides/:rideId/book', element: <BookRide /> },
-              { path: 'trips', element: <Placeholder title="My trips" phase="Phase 5" /> },
-              {
-                path: 'trips/:bookingId',
-                element: <Placeholder title="Trip detail" phase="Phase 5" />,
-              },
+              { path: 'trips', element: <MyTrips /> },
+              { path: 'trips/:bookingId', element: <TripDetail /> },
               { path: 'offer', element: <Placeholder title="Offer a ride" phase="Phase 7" /> },
               {
                 path: 'rides/:rideId/manage',

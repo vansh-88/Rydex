@@ -34,6 +34,12 @@ const AdminVehicles = lazy(async () => ({
   default: (await import('@/routes/admin/AdminVehicles')).AdminVehicles,
 }));
 
+// Chat pulls in socket.io-client, which nothing else needs — keeping it out
+// of the main bundle means the search-and-book path never downloads it.
+const Messages = lazy(async () => ({
+  default: (await import('@/routes/Messages')).Messages,
+}));
+
 function LazyRoute({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<ListSkeleton rows={3} />}>{children}</Suspense>;
 }
@@ -76,7 +82,22 @@ export const router = createBrowserRouter([
               { path: 'become-a-driver', element: <BecomeDriver /> },
               { path: 'vehicles', element: <Vehicles /> },
               { path: 'vehicles/:vehicleId', element: <VehicleDetail /> },
-              { path: 'messages', element: <Placeholder title="Messages" phase="Phase 9" /> },
+              {
+                path: 'messages',
+                element: (
+                  <LazyRoute>
+                    <Messages />
+                  </LazyRoute>
+                ),
+              },
+              {
+                path: 'messages/:conversationId',
+                element: (
+                  <LazyRoute>
+                    <Messages />
+                  </LazyRoute>
+                ),
+              },
               {
                 path: 'notifications',
                 element: <Placeholder title="Notifications" phase="Phase 10" />,

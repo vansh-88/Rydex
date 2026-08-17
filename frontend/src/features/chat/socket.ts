@@ -30,10 +30,18 @@ export type ChatSocket = Socket<ServerToClient, ClientToServer>;
 
 let socket: ChatSocket | null = null;
 
+// Must match the REST origin (see api/client.ts). Empty in development, where
+// the Vite proxy forwards /socket.io with `ws: true`; in a deployed build the
+// socket connects straight to the backend host, which is also why the backend's
+// Socket.IO CORS reads from the same CORS_ORIGIN allowlist.
+const SOCKET_ORIGIN = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+
 export function getChatSocket(): ChatSocket {
   if (socket !== null) return socket;
 
-  socket = io({
+  // `undefined` means same-origin, which is what the dev proxy needs — passing
+  // an empty string instead would not be treated the same way.
+  socket = io(SOCKET_ORIGIN.length > 0 ? SOCKET_ORIGIN : undefined, {
     // A callback rather than a fixed object: socket.io calls it again on every
     // reconnect, so a token refreshed since the last attempt is picked up
     // automatically instead of the socket retrying with a dead one.

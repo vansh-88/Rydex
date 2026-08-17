@@ -1,9 +1,15 @@
 import { tokenStore } from '@/auth/tokenStore';
 import { errorCopy } from '@/lib/errorCopy';
 
-// Every request goes through the Vite dev proxy (or the same origin in a
-// build), so the API is always same-origin and CORS never applies.
-const API_BASE = '/api/v1';
+// Empty in development, where vite.config.ts proxies /api to the backend so
+// requests stay same-origin and CORS never applies.
+//
+// In a deployed build the frontend and backend are on different hosts, so this
+// must be the backend's origin — and that backend's CORS_ORIGIN must name this
+// app's domain in return. Leaving it relative would send every request to
+// whatever host is serving the static files, which has no API on it.
+const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+const API_BASE = `${API_ORIGIN}/api/v1`;
 
 interface SuccessEnvelope<T> {
   success: true;

@@ -39,6 +39,13 @@ export interface RideDto {
   durationSeconds: number;
   routeGeometry: unknown;
   postingCommissionAmount: number;
+  // The driver's client needs this to reopen checkout when a publish payment
+  // was abandoned or failed. Without it a PENDING_PAYMENT ride is stuck
+  // forever: the order exists, but nothing can reach it. Same reasoning as
+  // Booking.prepaymentOrderId/finalPaymentOrderId — a provider order id is
+  // useless without the provider key, and Razorpay Checkout requires it
+  // client-side anyway.
+  postingCommissionOrderId: string;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -67,6 +74,7 @@ function toRideDto(ride: RideRecord): RideDto {
     durationSeconds: ride.durationSeconds,
     routeGeometry: JSON.parse(ride.routeGeometry) as unknown,
     postingCommissionAmount: ride.postingCommissionAmount,
+    postingCommissionOrderId: ride.postingCommissionOrderId,
     status: ride.status,
     createdAt: ride.createdAt.toISOString(),
     updatedAt: ride.updatedAt.toISOString(),

@@ -56,7 +56,9 @@ export function Login() {
 
   useEffect(() => {
     if (status === 'authenticated') {
-      navigate(redirectTo ? `${redirectTo.pathname}${redirectTo.search}` : '/', { replace: true });
+      navigate(redirectTo ? `${redirectTo.pathname}${redirectTo.search}` : '/search', {
+        replace: true,
+      });
     }
   }, [status, navigate, redirectTo]);
 

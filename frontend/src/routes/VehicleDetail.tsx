@@ -1,18 +1,20 @@
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { useCallback, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { getVehicle, uploadVehicleDocument } from '@/api/endpoints/vehicles';
 import { useApiMutation, useApiQuery } from '@/api/hooks';
 import type { VehicleDocumentType } from '@/api/types';
 import { ErrorState, InlineError } from '@/components/domain/States';
 import { StatusPill } from '@/components/domain/StatusPill';
-import { Button } from '@/components/ui/Button';
+import { Button, buttonStyles } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { FileUpload } from '@/components/ui/FileUpload';
 import { ListSkeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
+import { cn } from '@/lib/cn';
 import { VERIFICATION_STATUS } from '@/lib/statusMaps';
+import { latestDocumentOfType } from '@/lib/vehicleDocuments';
 
 const DOCUMENT_TYPES: { value: VehicleDocumentType; label: string; hint: string }[] = [
   { value: 'RC', label: 'Registration certificate (RC)', hint: 'Proves the vehicle is yours.' },
@@ -69,7 +71,24 @@ export function VehicleDetail() {
             <p className="font-medium text-ink">This vehicle was rejected</p>
             <p className="mt-1 text-sm text-ink-muted">{vehicle.rejectionReason}</p>
             <p className="mt-2 text-sm text-ink-muted">
-              Upload corrected documents below and it will be reviewed again.
+              A rejected vehicle can&rsquo;t be resubmitted. If you can fix what was wrong, add the
+              vehicle again and it will be reviewed fresh.
+            </p>
+            <Link to="/vehicles" className={cn(buttonStyles({ size: 'sm' }), 'mt-3')}>
+              Add another vehicle
+            </Link>
+          </CardBody>
+        </Card>
+      )}
+
+      {vehicle.verificationStatus === 'VERIFIED' && (
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardBody>
+            <p className="font-medium text-ink">This vehicle is verified</p>
+            <p className="mt-1 text-sm text-ink-muted">
+              Uploading or replacing a document sends it back for review, and you won&rsquo;t be
+              able to publish new rides with it until a reviewer approves it again. Rides you have
+              already published are unaffected.
             </p>
           </CardBody>
         </Card>
@@ -89,13 +108,16 @@ export function VehicleDetail() {
 
       <div className="space-y-3">
         {DOCUMENT_TYPES.map((type) => {
-          const existing = vehicle.documents?.find((doc) => doc.documentType === type.value);
+          const existing = latestDocumentOfType(vehicle.documents, type.value);
           return (
             <DocumentRow
               key={type.value}
               vehicleId={vehicle.id}
               type={type}
               existing={existing}
+              // The backend refuses uploads on a rejected vehicle, so the
+              // control is hidden rather than left to fail.
+              locked={vehicle.verificationStatus === 'REJECTED'}
               onUploaded={refetch}
             />
           );
@@ -109,6 +131,7 @@ function DocumentRow({
   vehicleId,
   type,
   existing,
+  locked,
   onUploaded,
 }: {
   vehicleId: string;
@@ -116,6 +139,7 @@ function DocumentRow({
   existing:
     | { id: string; status: string; documentUrl: string; createdAt: string }
     | undefined;
+  locked: boolean;
   onUploaded: () => void;
 }) {
   const { toast } = useToast();
@@ -156,16 +180,23 @@ function DocumentRow({
           </a>
         )}
 
-        <FileUpload
-          label={existing === undefined ? 'Upload' : 'Replace'}
-          value={file}
-          onChange={setFile}
-          disabled={mutation.isPending}
-        />
+        {locked ? (
+          <p className="text-sm text-ink-faint">
+            {existing === undefined ? 'Never uploaded.' : 'No further changes possible.'}
+          </p>
+        ) : (
+          <FileUpload
+            label={existing === undefined ? 'Upload' : 'Replace'}
+            hint="Uploading sends this vehicle back for review."
+            value={file}
+            onChange={setFile}
+            disabled={mutation.isPending}
+          />
+        )}
 
         {mutation.error !== undefined && <InlineError error={mutation.error} />}
 
-        {file !== null && (
+        {!locked && file !== null && (
           <Button
             loading={mutation.isPending}
             onClick={() => {

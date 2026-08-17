@@ -13,7 +13,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Find a ride' },
+  { to: '/search', label: 'Find a ride' },
   { to: '/trips', label: 'My trips' },
   { to: '/messages', label: 'Messages' },
 ];

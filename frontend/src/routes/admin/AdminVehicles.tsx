@@ -10,6 +10,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { ListSkeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
 import { VERIFICATION_STATUS } from '@/lib/statusMaps';
+import { latestDocumentsByType } from '@/lib/vehicleDocuments';
 
 import { ReviewDecision } from './ReviewDecision';
 
@@ -85,7 +86,9 @@ function VehicleReviewCard({
     },
   });
 
-  const documents = vehicle.documents ?? [];
+  // Only the current upload of each type — a reviewer must not be shown a
+  // superseded RC alongside its replacement.
+  const documents = latestDocumentsByType(vehicle.documents);
   const missing = REQUIRED_DOCUMENTS.filter(
     (type) => !documents.some((doc) => doc.documentType === type),
   );

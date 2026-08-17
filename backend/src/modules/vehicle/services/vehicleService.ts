@@ -167,7 +167,20 @@ export async function uploadVehicleDocument(
   documentType: VehicleDocumentType,
   input: UploadVehicleDocumentInput,
 ): Promise<VehicleDocumentDto> {
-  await getOwnedVehicleOrThrow(ownerId, vehicleId);
+  const vehicle = await getOwnedVehicleOrThrow(ownerId, vehicleId);
+
+  // A rejection is final for this vehicle: the driver registers a different
+  // one rather than reworking a vehicle a reviewer has already turned down.
+  // Enforced here rather than only in the UI, since the UI cannot be the
+  // authority on it — and because vehicleDocumentRepository.create would
+  // otherwise quietly move the vehicle back into the review queue.
+  if (vehicle.verificationStatus === 'REJECTED') {
+    throw new AppError(
+      409,
+      'VEHICLE_REJECTED',
+      'This vehicle was rejected and cannot be resubmitted. Add the vehicle again to have it reviewed.',
+    );
+  }
 
   const uploaded = await documentProvider.uploadDocument({
     buffer: input.buffer,

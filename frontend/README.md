@@ -64,6 +64,28 @@ src/
 `/_kitchen-sink` renders every primitive in every state — the fastest way to
 check a design-system change without clicking through the product.
 
+## Landing page image
+
+The marketing hero loads `/hero.jpg` from `public/` (2400×900 works well).
+Without the file the hero falls back to a designed gradient — the layout is
+built to look deliberate either way, so a missing image never renders broken.
+
+`public/` currently holds three candidates pulled from Unsplash, whose licence
+permits commercial use without attribution. Rename whichever you prefer to
+`hero.jpg`:
+
+| File | Unsplash description |
+|---|---|
+| `hero.jpg` | Group of people standing beside a blue car, daytime |
+| `hero-inside-car.jpg` | Inside a car driving on the road |
+| `hero-driving.jpg` | Man driving a car |
+
+Swap in your own image any time — only the filename matters.
+
+The "Eco-leader status" card in the hero is labelled **Example** on purpose:
+Rydex does not track emissions, and a visitor who is not signed in has no
+rating, so those figures illustrate a profile rather than report one.
+
 ## Bundle
 
 Code-split so the booking path stays small. Leaflet (maps), socket.io-client
@@ -80,8 +102,9 @@ Code-split so the booking path stays small. Leaflet (maps), socket.io-client
 ## Things the API forces on the UI
 
 - **Search needs auth.** `GET /rides/search` is authenticated, so an anonymous
-  visitor cannot search. The landing form stashes the query, routes to login and
-  runs it afterwards.
+  visitor cannot search at all. That is why `/` is a marketing page with no
+  search box and signed-in users are redirected to `/search`, which owns the
+  form — a form on the landing page could only ever bounce a visitor to login.
 - **Search is single-date, Asia/Kolkata, hard-coded.** No date flexibility, no
   time window, no price or seat filter. The date picker must not imply otherwise.
 - **Search results carry no addresses** — only distance from the points you

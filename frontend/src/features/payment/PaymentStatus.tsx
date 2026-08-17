@@ -5,6 +5,7 @@ import { ApiError } from '@/api/client';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
 
+import { PaymentConfigError } from './razorpay';
 import type { PaymentPhase } from './usePaymentFlow';
 
 interface PaymentStatusProps {
@@ -141,6 +142,25 @@ export function PaymentStatus({
       );
 
     case 'failed':
+      // A misconfiguration is not a declined payment, and telling the person
+      // running the app to "try again" would send them in circles.
+      if (error instanceof PaymentConfigError) {
+        return (
+          <Panel
+            tone="warning"
+            icon={<Terminal className="size-6 text-amber-600" aria-hidden />}
+            title="Payments aren't configured"
+          >
+            <p>{error.message}</p>
+            <p className="mt-2 text-xs">
+              Set it in <code>frontend/.env.local</code> to the Razorpay <code>key_id</code> that
+              matches the backend&rsquo;s <code>PAYMENT_PROVIDER_KEY</code>, then restart the dev
+              server.
+            </p>
+          </Panel>
+        );
+      }
+
       return (
         <Panel
           tone="danger"

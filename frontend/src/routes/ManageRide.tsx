@@ -14,6 +14,7 @@ import { Button, buttonStyles } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { ListSkeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
+import { PublishPayment } from '@/features/payment/PublishPayment';
 import { RatingDialog } from '@/features/ratings/RatingDialog';
 import { CancelRideDialog } from '@/features/trips/CancelRideDialog';
 import { formatDeparture, formatRelativeToNow } from '@/lib/kolkataDate';
@@ -117,6 +118,15 @@ export function ManageRide() {
 
       <StatusHint status={ride.status} map={RIDE_STATUS} />
 
+      {ride.status === 'PENDING_PAYMENT' && (
+        <PublishPayment
+          ride={ride}
+          onSettled={() => {
+            refetch();
+          }}
+        />
+      )}
+
       <Card>
         <CardBody className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-muted">
@@ -128,7 +138,8 @@ export function ManageRide() {
               <Fare amount={ride.farePerSeat} size="sm" /> per seat
             </span>
             <span className="text-ink-faint">
-              Posting fee paid: <Fare amount={ride.postingCommissionAmount} size="sm" />
+              {ride.status === 'PENDING_PAYMENT' ? 'Posting fee due: ' : 'Posting fee paid: '}
+              <Fare amount={ride.postingCommissionAmount} size="sm" />
             </span>
           </div>
 

@@ -43,18 +43,35 @@ export function findPendingWithOwnerAndDocuments() {
 // Same conditional-update pattern as the driver-license flow (§58): the
 // WHERE clause double-checks verificationStatus = 'PENDING' atomically, so
 // two concurrent admin decisions on the same vehicle can't both apply.
+// The reviewer decides on the vehicle by looking at its documents, so the
+// decision has to land on the documents too. Previously only the vehicle row
+// moved, leaving every document stuck at PENDING forever — which the UI
+// rendered as a VERIFIED vehicle whose papers all still said "Under review",
+// a contradiction with no way to resolve it.
+//
+// One transaction, and the conditional guard stays on the vehicle update so
+// two concurrent decisions still cannot both apply.
 export async function verifyVehicle(vehicleId: string, adminId: string): Promise<boolean> {
-  const result = await prisma.vehicle.updateMany({
-    where: { id: vehicleId, verificationStatus: 'PENDING' },
-    data: {
-      verificationStatus: 'VERIFIED',
-      verifiedById: adminId,
-      verifiedAt: new Date(),
-      rejectionReason: null,
-    },
-  });
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.vehicle.updateMany({
+      where: { id: vehicleId, verificationStatus: 'PENDING' },
+      data: {
+        verificationStatus: 'VERIFIED',
+        verifiedById: adminId,
+        verifiedAt: new Date(),
+        rejectionReason: null,
+      },
+    });
 
-  return result.count === 1;
+    if (result.count !== 1) return false;
+
+    await tx.vehicleDocument.updateMany({
+      where: { vehicleId, status: 'PENDING' },
+      data: { status: 'VERIFIED' },
+    });
+
+    return true;
+  });
 }
 
 export async function rejectVehicle(
@@ -62,17 +79,30 @@ export async function rejectVehicle(
   adminId: string,
   rejectionReason: string,
 ): Promise<boolean> {
-  const result = await prisma.vehicle.updateMany({
-    where: { id: vehicleId, verificationStatus: 'PENDING' },
-    data: {
-      verificationStatus: 'REJECTED',
-      verifiedById: adminId,
-      verifiedAt: new Date(),
-      rejectionReason,
-    },
-  });
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.vehicle.updateMany({
+      where: { id: vehicleId, verificationStatus: 'PENDING' },
+      data: {
+        verificationStatus: 'REJECTED',
+        verifiedById: adminId,
+        verifiedAt: new Date(),
+        rejectionReason,
+      },
+    });
 
-  return result.count === 1;
+    if (result.count !== 1) return false;
+
+    // Same reasoning as verifyVehicle: the decision applies to the papers the
+    // reviewer actually looked at. Uploading a replacement puts the vehicle —
+    // and therefore this review — back to PENDING
+    // (vehicleDocumentRepository.create).
+    await tx.vehicleDocument.updateMany({
+      where: { vehicleId, status: 'PENDING' },
+      data: { status: 'REJECTED' },
+    });
+
+    return true;
+  });
 }
 
 export interface UpdateVehicleInput {

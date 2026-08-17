@@ -133,6 +133,9 @@ export interface Ride {
   durationSeconds: number;
   routeGeometry: Geometry;
   postingCommissionAmount: number;
+  // Lets a driver reopen checkout for a ride whose publish payment never
+  // completed. Without it a PENDING_PAYMENT ride is unrecoverable.
+  postingCommissionOrderId: string;
   status: RideStatus;
   createdAt: string;
   updatedAt: string;

@@ -33,6 +33,8 @@ const COPY: Record<string, string> = {
   // Driver onboarding
   ALREADY_DRIVER: 'You are already registered as a driver.',
   DRIVER_APPLICATION_PENDING: 'Your driver application is already under review.',
+  VEHICLE_REJECTED:
+    'This vehicle was rejected and cannot be resubmitted. Add the vehicle again to have it reviewed.',
   VEHICLE_NOT_ELIGIBLE:
     'This vehicle cannot be used yet — it needs to be verified and have enough seats.',
 

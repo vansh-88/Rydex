@@ -59,6 +59,21 @@ function loadCheckout(): Promise<void> {
 
 export const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID as string | undefined;
 
+// Distinguishes "this app is misconfigured" from "this payment failed". The
+// two need completely different messages: one is for whoever is running the
+// app, the other for the user holding the card.
+export class PaymentConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PaymentConfigError';
+  }
+}
+
+// A placeholder is as broken as an empty value, and .env.example ships one.
+function isUsableKey(key: string | undefined): key is string {
+  return key !== undefined && key.length > 0 && !key.includes('xxxx');
+}
+
 // The backend falls back to StubPaymentProvider whenever PAYMENT_PROVIDER_KEY
 // is blank, and its order ids carry this prefix. Razorpay Checkout cannot open
 // such an order, so the UI needs to recognise it rather than fail obscurely.
@@ -78,8 +93,10 @@ export type CheckoutOutcome = 'completed' | 'dismissed';
 // user finished the widget's flow — whether money actually moved is decided
 // by the webhook, and the caller must poll to find out.
 export async function openCheckout(input: OpenCheckoutInput): Promise<CheckoutOutcome> {
-  if (RAZORPAY_KEY_ID === undefined || RAZORPAY_KEY_ID.length === 0) {
-    throw new Error('VITE_RAZORPAY_KEY_ID is not configured');
+  if (!isUsableKey(RAZORPAY_KEY_ID)) {
+    throw new PaymentConfigError(
+      'VITE_RAZORPAY_KEY_ID is not set in the frontend environment, so the payment window cannot open.',
+    );
   }
 
   await loadCheckout();

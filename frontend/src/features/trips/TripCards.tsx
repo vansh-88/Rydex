@@ -129,9 +129,15 @@ export function DriverRideCard({ ride }: { ride: RideListItem }) {
           </div>
           <Link
             to={`/rides/${ride.id}/manage`}
-            className={buttonStyles({ variant: 'secondary', size: 'sm' })}
+            className={buttonStyles({
+              // An unpaid ride is invisible to passengers, so paying is the
+              // only thing worth doing with it — make that the primary action
+              // rather than hiding it behind "Manage".
+              variant: ride.status === 'PENDING_PAYMENT' ? 'primary' : 'secondary',
+              size: 'sm',
+            })}
           >
-            Manage
+            {ride.status === 'PENDING_PAYMENT' ? 'Complete payment' : 'Manage'}
           </Link>
         </div>
       </div>

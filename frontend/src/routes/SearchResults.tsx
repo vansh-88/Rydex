@@ -1,6 +1,6 @@
 import { SearchX, SlidersHorizontal } from 'lucide-react';
 import { useCallback } from 'react';
-import { Navigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 
 import { searchRides } from '@/api/endpoints/rides';
 import { usePaginatedQuery } from '@/api/hooks';
@@ -17,6 +17,7 @@ import {
   SORT_OPTIONS,
   type SearchCriteria,
 } from '@/features/search/searchParams';
+import { UpNext } from '@/features/trips/UpNext';
 import { formatDay } from '@/lib/kolkataDate';
 import type { RideSearchSort } from '@/api/types';
 
@@ -52,11 +53,29 @@ export function SearchResults() {
     setSearchParams(criteriaToSearchParams(next));
   }
 
-  // Reached with no (or half a) query: a hand-edited URL, or a stale link.
-  // The home page owns the empty search form, so send them there rather than
-  // rendering a second copy of it.
+  // No (or half a) query yet — this is the signed-in landing state: search
+  // form plus whatever needs the user's attention. The marketing page at "/"
+  // has no search box, so this is the only place it lives.
   if (criteria === null) {
-    return <Navigate to="/" replace />;
+    return (
+      <div className="mx-auto max-w-3xl py-4">
+        <h1 className="text-2xl font-semibold text-ink">Where to?</h1>
+        <p className="mt-1 text-ink-muted">
+          Rydex matches drivers already making your journey.
+        </p>
+
+        <div className="mt-6 rounded-card border border-border-subtle bg-surface p-4 sm:p-6">
+          <SearchForm onSubmit={applyCriteria} />
+        </div>
+
+        <p className="mt-3 text-sm text-ink-faint">
+          Rides are matched within 10 km of both your pickup and your destination, on the date you
+          choose.
+        </p>
+
+        <UpNext />
+      </div>
+    );
   }
 
   return (

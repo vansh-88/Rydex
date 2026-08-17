@@ -69,9 +69,16 @@ function invalidArgsResult(message: string): ToolExecutionResult {
 // These projections keep the ownership-checked service calls exactly as they
 // are and trim only what reaches the model: the fields a support answer is
 // actually phrased from.
+// Every amount Rydex stores is whole rupees (fareService/commissionService
+// round to integers; conversion to paise happens only at the Razorpay
+// boundary). Stating that in the payload keeps the model from guessing a
+// currency or treating the value as minor units.
+const MONEY_CURRENCY = 'INR';
+
 function toSupportRide(ride: Awaited<ReturnType<typeof rideService.getRide>>) {
   return {
     id: ride.id,
+    currency: MONEY_CURRENCY,
     status: ride.status,
     departureTime: ride.departureTime,
     availableSeats: ride.availableSeats,
@@ -79,7 +86,11 @@ function toSupportRide(ride: Awaited<ReturnType<typeof rideService.getRide>>) {
     farePerSeat: ride.farePerSeat,
     distanceMeters: ride.distanceMeters,
     durationSeconds: ride.durationSeconds,
-    origin: { latitude: ride.origin.latitude, longitude: ride.origin.longitude, address: ride.origin.address },
+    origin: {
+      latitude: ride.origin.latitude,
+      longitude: ride.origin.longitude,
+      address: ride.origin.address,
+    },
     destination: {
       latitude: ride.destination.latitude,
       longitude: ride.destination.longitude,
@@ -91,6 +102,7 @@ function toSupportRide(ride: Awaited<ReturnType<typeof rideService.getRide>>) {
 function toSupportBooking(booking: Awaited<ReturnType<typeof bookingService.getBooking>>) {
   return {
     id: booking.id,
+    currency: MONEY_CURRENCY,
     rideId: booking.rideId,
     status: booking.status,
     seatCount: booking.seatCount,
@@ -128,9 +140,13 @@ export async function executeToolCall(
       }
       case 'getMyRecentRidesAsDriver': {
         // Already a lean summary (RideSummaryDto — no geometry/coordinates),
-        // so it needs no projection.
+        // so the only projection needed is the currency marker its
+        // `farePerSeat` would otherwise be missing.
         const rides = await rideService.getMyRecentRidesAsDriver(userId);
-        return { content: JSON.stringify(rides), isError: false };
+        return {
+          content: JSON.stringify(rides.map((ride) => ({ ...ride, currency: MONEY_CURRENCY }))),
+          isError: false,
+        };
       }
       case 'getRideStatus': {
         const parsed = rideIdArgsSchema.safeParse(call.arguments);

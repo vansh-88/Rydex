@@ -4,6 +4,8 @@ import type { AIToolCall, AIToolDefinition } from '../../../infrastructure/ai/ai
 import { AppError } from '../../../shared/errors/AppError.js';
 import * as bookingService from '../../booking/services/bookingService.js';
 import * as rideService from '../../ride/services/rideService.js';
+import * as userService from '../../user/services/userService.js';
+import * as vehicleService from '../../vehicle/services/vehicleService.js';
 
 // claude.md §96.5 (Tool/context layer): every schema below is deliberately
 // missing a userId/identity parameter — the model's only degree of freedom
@@ -27,6 +29,12 @@ export const SUPPORT_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ['bookingId'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'getMyAccountStatus',
+    description:
+      "Get the authenticated user's own account and verification status: whether they are a passenger or a verified driver, the state of their driving-licence application (including the reviewer's rejection reason if it was rejected), and the verification state of each vehicle they have added. Use this for any question about becoming a driver, why an application or vehicle was rejected, or whether they can publish rides yet.",
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'getMyRecentRidesAsDriver',
@@ -137,6 +145,33 @@ export async function executeToolCall(
         }
         const booking = await bookingService.getBooking(userId, parsed.data.bookingId);
         return { content: JSON.stringify(toSupportBooking(booking)), isError: false };
+      }
+      case 'getMyAccountStatus': {
+        const [profile, vehicles] = await Promise.all([
+          userService.getProfile(userId),
+          vehicleService.listVehicles(userId),
+        ]);
+        return {
+          content: JSON.stringify({
+            role: profile.role,
+            driverLicenseStatus: profile.driverLicenseStatus,
+            driverLicenseRejectionReason: profile.driverLicenseRejectionReason,
+            canPublishRides:
+              profile.role === 'DRIVER' &&
+              vehicles.some(
+                (vehicle) =>
+                  vehicle.verificationStatus === 'VERIFIED' && vehicle.status === 'ACTIVE',
+              ),
+            vehicles: vehicles.map((vehicle) => ({
+              registrationNumber: vehicle.registrationNumber,
+              make: vehicle.make,
+              model: vehicle.model,
+              verificationStatus: vehicle.verificationStatus,
+              rejectionReason: vehicle.rejectionReason,
+            })),
+          }),
+          isError: false,
+        };
       }
       case 'getMyRecentRidesAsDriver': {
         // Already a lean summary (RideSummaryDto — no geometry/coordinates),

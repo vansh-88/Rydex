@@ -26,5 +26,14 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
     },
   },
+  {
+    // Standalone dev scripts run directly under Node rather than through the
+    // app's TypeScript build, so they need Node's globals declared. Not
+    // type-checked: they are outside tsconfig's `include`.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly', fetch: 'readonly' },
+    },
+  },
   eslintConfigPrettier,
 );

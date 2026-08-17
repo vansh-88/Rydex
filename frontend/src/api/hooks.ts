@@ -63,16 +63,20 @@ export function useApiQuery<T>(
 
       setIsFetching(true);
       try {
-        const result = await dedupe(activeKey, () => fetcherRef.current(controller.signal));
+        const result = await dedupe(activeKey, (signal) => fetcherRef.current(signal));
         if (controller.signal.aborted) return;
         writeCache(activeKey, result);
         setData(result);
         setError(undefined);
       } catch (caught) {
+        // This component moved on — its own signal is the only reason to stay
+        // silent about a failure.
         if (controller.signal.aborted) return;
-        // An aborted fetch surfaces as AbortError, which is a navigation
-        // artifact rather than something a user should ever see.
-        if (caught instanceof DOMException && caught.name === 'AbortError') return;
+        // Everything else must reach state. There is deliberately no blanket
+        // AbortError guard here: swallowing one while this caller is still
+        // alive sets neither `data` nor `error`, which reads as "loading
+        // forever" and is exactly the bug that used to strand the admin
+        // queues on skeletons.
         setError(caught);
       } finally {
         if (!controller.signal.aborted) setIsFetching(false);

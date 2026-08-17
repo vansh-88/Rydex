@@ -3,6 +3,7 @@
 node_modules/
 dist/
 coverage/
+scripts/
 
 .env
 .env.local

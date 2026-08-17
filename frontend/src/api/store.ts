@@ -63,11 +63,27 @@ export function invalidate(...prefixes: string[]): void {
 }
 
 // Shares one promise per key across concurrent callers.
-export async function dedupe<T>(key: string, run: () => Promise<T>): Promise<T> {
+//
+// The shared request owns its own AbortSignal rather than borrowing the first
+// caller's. Borrowing was a real bug: when that caller unmounted and aborted,
+// every other subscriber awaiting the same promise received an AbortError for
+// a request it had not cancelled — and under StrictMode's mount/unmount/mount
+// cycle that was *always* the second mount, leaving the query stuck with
+// neither data nor error (i.e. loading forever).
+//
+// The trade-off is that an in-flight request is no longer cancelled when the
+// component that started it goes away. That is the right way round: callers
+// still ignore results for their own aborted signal, and the response
+// populates the cache for whoever asks next.
+export async function dedupe<T>(
+  key: string,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const existing = inFlight.get(key);
   if (existing !== undefined) return existing as Promise<T>;
 
-  const promise = run().finally(() => {
+  const controller = new AbortController();
+  const promise = run(controller.signal).finally(() => {
     inFlight.delete(key);
   });
   inFlight.set(key, promise);

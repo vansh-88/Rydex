@@ -1,6 +1,6 @@
 import { SearchX, SlidersHorizontal } from 'lucide-react';
 import { useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 
 import { searchRides } from '@/api/endpoints/rides';
 import { usePaginatedQuery } from '@/api/hooks';
@@ -22,7 +22,6 @@ import type { RideSearchSort } from '@/api/types';
 
 export function SearchResults() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const criteria = parseSearchCriteria(searchParams);
 
   // Keyed on everything that changes the query. A new key resets the
@@ -53,20 +52,11 @@ export function SearchResults() {
     setSearchParams(criteriaToSearchParams(next));
   }
 
+  // Reached with no (or half a) query: a hand-edited URL, or a stale link.
+  // The home page owns the empty search form, so send them there rather than
+  // rendering a second copy of it.
   if (criteria === null) {
-    return (
-      <div className="mx-auto max-w-2xl py-8">
-        <h1 className="text-2xl font-semibold text-ink">Find a ride</h1>
-        <p className="mt-1 text-ink-muted">Tell us where you&rsquo;re going.</p>
-        <div className="mt-6 rounded-card border border-border-subtle bg-surface p-4 sm:p-6">
-          <SearchForm
-            onSubmit={(next) => {
-              navigate(`/search?${criteriaToSearchParams(next).toString()}`);
-            }}
-          />
-        </div>
-      </div>
-    );
+    return <Navigate to="/" replace />;
   }
 
   return (
